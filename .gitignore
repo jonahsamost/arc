@@ -1,0 +1,7 @@
+src/data/re_arc_data
+src/data/training
+src/data/eval
+*.pyc
+test.py
+__pycache__
+

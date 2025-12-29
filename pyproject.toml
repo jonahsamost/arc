@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arcagi"
+version = "0.1.0"
+description = "ARC-AGI Data Augmentation Tools"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "torch>=2.0.0",
+    "numpy", 
+    "matplotlib",
+    "tqdm"
+]
+
+# Optional: Add scripts to run your augmentation easily
+# usage: arc-aug
+[project.scripts]
+arc-aug = "my_package_name.augment:main"
