@@ -1,7 +1,10 @@
 src/data/re_arc_data
-src/data/training
-src/data/eval
+src/data/arc_data_eval/
+src/data/arc_data_training/
+src/data/train_data/
 *.pyc
 test.py
 __pycache__
+*egg-info
+build
 
