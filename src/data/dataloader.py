@@ -8,10 +8,11 @@ from src.data.tokenizer import ArcBaselineTokenizer
 
 
 class ArcDataset(IterableDataset):
-    def __init__(self, data_dir: str, baseline: bool = False):
+    def __init__(self, data_dir: str, baseline_1d: bool = False, raw: bool = False):
         self.data_dir = data_dir
         self.shard_files = sorted(glob.glob(f"{data_dir}/*.jsonl"))
-        if baseline:
+        self.raw = raw
+        if baseline_1d:
             self.tokenizer = ArcBaselineTokenizer()
         else:
             self.tokenizer = Arc2DTokenizer()
@@ -37,4 +38,8 @@ class ArcDataset(IterableDataset):
                     if not line.strip(): 
                         continue
                     data = json.loads(line)
-                    yield self.tokenizer.build_sample(data['puzzle'])
+                    data, filepath = data
+                    if self.raw:
+                        yield data, filepath
+                    else:
+                        yield self.tokenizer.build_sample(data['puzzle']), filepath

@@ -19,10 +19,12 @@ class ARCAugmenter:
         return arr
 
     def generate_augmentation_params(self, augment: bool = False):
+        if not augment:
+            return 0, np.arange(0, 11, dtype=np.uint8) 
+
         trans_id = np.random.randint(0, 8)
-        
         strategy_roll = np.random.random()
-        if augment or strategy_roll < 0.10: # identity
+        if strategy_roll < 0.10: # identity
             mapping = np.arange(0, 11, dtype=np.uint8)
         elif strategy_roll < 0.50: # maintain closeness of colors
             k = np.random.randint(1, 9)
@@ -76,39 +78,54 @@ class ARCAugmenter:
         return new_input, new_output
 
     def augment_puzzle(
-        self, puzzle: dict, num_augmentations: int = 1,
-                eval: bool = False, augment: bool = True
-        ) -> list:
+        self, 
+        puzzle: dict, 
+        num_augmentations: int = 1,
+        augment: bool = True,  # Controls Color/Rotation
+        jitter: bool = True    # Controls Position (Random vs Top-Left)
+    ) -> list:
         augmented_data = []
 
         for _ in range(num_augmentations):
+            # 1. Augmentation Params (Color/Rotation)
+            # If augment=False, we force Identity (trans_id=0, mapping=0..9)
             trans_id, mapping = self.generate_augmentation_params(augment=augment)
             
-            mapping_str = "".join(str(x) for x in mapping)
+            # Create ID for tracking
+            mapping_str = "".join(str(x) for x in mapping) if augment else "identity"
             aug_id = f"t{trans_id}{PUZZLE_ID_SEPARATOR}{mapping_str}"
             
             aug_puzzle = {'train': [], 'test': []}
-            
             all_pairs = puzzle['train'] + puzzle['test']
             
-            og_dims = None
+            task_og_dims = None 
+
             for i, pair in enumerate(all_pairs):
-                # 1. Convert & Permute Colors
                 in_arr = np.array(pair['input'], dtype=np.uint8)
                 out_arr = np.array(pair['output'], dtype=np.uint8)
                 
+                # Capture original dims for Tokenizer/Cropping later
+                h_in_raw, w_in_raw = in_arr.shape
+                h_out_raw, w_out_raw = out_arr.shape
+                
+                # Update task dims if it's the test pair (last one)
+                if i == len(all_pairs) - 1:
+                    task_og_dims = [h_in_raw, w_in_raw, h_out_raw, w_out_raw]
+
+                # --- STEP 1: Transformation ( Controlled by `augment` ) ---
+                # Even if augment=False, this code runs safely because 
+                # generate_augmentation_params returns identity mapping/transform.
                 in_arr = mapping[in_arr]
                 out_arr = mapping[out_arr]
-                
-                # 2. Dihedral Transform
                 in_arr = self.dihedral_transform(in_arr, trans_id)
                 out_arr = self.dihedral_transform(out_arr, trans_id)
                 
-                # 3. Canvas Jitter (New Step)
-                h_in, w_in = in_arr.shape
-                h_out, w_out = out_arr.shape
-                og_dims = og_dims if og_dims else [h_in, w_in, h_out, w_out]
-                in_arr, out_arr = self.apply_canvas_jitter(in_arr, out_arr)
+                # --- STEP 2: Layout ( Controlled by `jitter` ) ---
+                # We ALWAYS apply this function to get 30x30, 
+                # but `no_jitter` decides where the grid goes.
+                in_arr, out_arr = self.apply_canvas_jitter(
+                    in_arr, out_arr, no_jitter=(not jitter)
+                )
                 
                 new_pair = {'input': in_arr.tolist(), 'output': out_arr.tolist()}
                 
@@ -120,7 +137,7 @@ class ARCAugmenter:
             augmented_data.append({
                 "aug_id": aug_id,
                 "puzzle": aug_puzzle,
-                "og_dims": og_dims,
+                "og_dims": task_og_dims, 
             })
 
         return augmented_data
