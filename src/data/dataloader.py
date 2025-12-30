@@ -4,16 +4,19 @@ import glob
 import math
 from torch.utils.data import IterableDataset, get_worker_info
 from src.data.tokenizer_2d import Arc2DTokenizer
-from src.data.tokenizer import ArcBaselineTokenizer
+from src.data.tokenizer_1d import ArcBaselineTokenizer
 
 
 class ArcDataset(IterableDataset):
-    def __init__(self, data_dir: str, baseline_1d: bool = False, raw: bool = False):
+    def __init__(
+        self, data_dir: str, model_name: str = 'Qwen/Qwen2.5-Coder-7B-Instruct',
+        baseline_1d: bool = False, raw: bool = False
+    ):
         self.data_dir = data_dir
         self.shard_files = sorted(glob.glob(f"{data_dir}/*.jsonl"))
         self.raw = raw
         if baseline_1d:
-            self.tokenizer = ArcBaselineTokenizer()
+            self.tokenizer = ArcBaselineTokenizer(model_name=model_name)
         else:
             self.tokenizer = Arc2DTokenizer()
         if not self.shard_files:
@@ -37,9 +40,9 @@ class ArcDataset(IterableDataset):
                 for line in f:
                     if not line.strip(): 
                         continue
-                    data = json.loads(line)
-                    data, filepath = data
+                    datas = json.loads(line)
+                    data, filename = datas
                     if self.raw:
-                        yield data, filepath
+                        yield data, filename
                     else:
-                        yield self.tokenizer.build_sample(data['puzzle']), filepath
+                        yield self.tokenizer.build_sample(data['puzzle']), filename

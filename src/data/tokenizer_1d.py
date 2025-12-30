@@ -2,51 +2,62 @@ import torch
 import numpy as np
 from transformers import AutoTokenizer
 
-# Standard Separators for "Grid as Text"
-TOK_ROW_SEP    = "\n" 
-TOK_PAIR_START = "<|pair_start|>" 
-TOK_INPUT_SEP  = "<|input|>" 
-TOK_OUTPUT_SEP = "<|output|>" 
+# Standard Abstract Separators
+# We keep these variable names for code consistency, 
+# but they will map to existing Qwen tokens internally.
+TOK_PAIR_START = "<|pair_start|>"
+TOK_INPUT_SEP  = "<|input|>"
+TOK_OUTPUT_SEP = "<|output|>"
 TOK_PAIR_END   = "<|pair_end|>"
 
 class ArcBaselineTokenizer:
-    def __init__(self, model_id="Qwen/Qwen2-7B"):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    def __init__(self, model_name="Qwen/Qwen2.5-Coder-7B-Instruct"):
+        # Load the standard tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         
-        # 1. Add Special Structure Tokens
-        special_tokens_dict = {
-            "additional_special_tokens": [
-                TOK_PAIR_START, TOK_INPUT_SEP, TOK_OUTPUT_SEP, TOK_PAIR_END
-            ]
-        }
-        self.tokenizer.add_special_tokens(special_tokens_dict)
-        
-        # 2. ROBUST ID FETCHING
-        # We use encode() instead of convert_tokens_to_ids() to be safe.
-        # We take [0] because encode returns a list (sometimes with start tokens).
+        # --- CRITICAL CHANGE: REUSE EXISTING TOKENS ---
+        # Do NOT add special tokens. Do NOT resize embeddings.
+        # This prevents the ValueError with device_map="auto".
         
         def get_id(token_str):
-            # add_special_tokens=False ensures we don't get BOS/EOS added automatically
+            # Encode string and take the last token ID.
+            # add_special_tokens=False ensures no BOS/EOS is added.
             ids = self.tokenizer.encode(token_str, add_special_tokens=False)
             if not ids:
-                raise ValueError(f"Tokenizer failed to encode: '{token_str}'")
-            return ids[-1] # Take the last token (usually the only one)
+                # Fallback for weird edge cases, though unlikely for basic symbols
+                print(f"Warning: Could not encode '{token_str}', falling back to newline.")
+                return self.tokenizer.encode("\n", add_special_tokens=False)[-1]
+            return ids[-1]
 
-        # Cache IDs for Digits 0-9
+        # 1. Map Structural Constants to Existing Qwen Tokens
+        # We choose tokens that Qwen semantically understands as "separators" or "structure".
+        self.sep_ids = {
+            # "###" is a common header in Markdown/Code
+            TOK_PAIR_START: get_id("###"),
+            
+            # "\n" naturally separates headers from content
+            TOK_INPUT_SEP:  get_id("\n"),
+            
+            # "=>" or "=" implies a transformation or result
+            TOK_OUTPUT_SEP: get_id("=>"),
+            
+            # "\n" or ";" marks the end of a block
+            TOK_PAIR_END:   get_id("\n\n") 
+        }
+
+        # 2. Cache IDs for Digits 0-9
         self.digit_ids = [get_id(str(i)) for i in range(10)]
         
-        # Cache ID for newline (Handle \n carefully)
-        # Note: Some tokenizers treat "\n" as multiple tokens or blank. 
-        # If this fails, we can fallback to specific unicode bytes.
+        # 3. Cache ID for Row Separator (Newline)
         self.newline_id = get_id("\n")
         
-        # Cache IDs for structure tokens
-        self.sep_ids = {
-            k: get_id(k)
-            for k in [TOK_PAIR_START, TOK_INPUT_SEP, TOK_OUTPUT_SEP, TOK_PAIR_END]
-        }
-        
         self.ignore_index = -100
+        
+        # Debug Print to verify IDs
+        print(f"Tokenizer Initialized (Reuse Mode):")
+        print(f"  '0' ID: {self.digit_ids[0]}")
+        print(f"  Start (###) ID: {self.sep_ids[TOK_PAIR_START]}")
+        print(f"  Output (=>) ID: {self.sep_ids[TOK_OUTPUT_SEP]}")
 
     def serialize_grid_1d(self, grid: list) -> list:
         """
@@ -64,13 +75,12 @@ class ArcBaselineTokenizer:
                 
                 # Validation: Ensure value is a valid digit 0-9
                 if val is None or not (0 <= val <= 9):
-                    # Fallback or Error? For now, map to 0 or skip
                     val = 0 
                 
                 # Append the cached ID
                 ids.append(self.digit_ids[int(val)])
             
-            # End of row
+            # End of row (Newline)
             if r < rows - 1:
                 ids.append(self.newline_id)
                 
@@ -88,8 +98,7 @@ class ArcBaselineTokenizer:
         for i, pair in enumerate(all_pairs):
             is_test_pair = (i >= len(train_pairs))
             
-            # --- Header ---
-            # Use safe dictionary lookup
+            # --- Header: "### \n" ---
             input_ids.append(self.sep_ids[TOK_PAIR_START])
             input_ids.append(self.sep_ids[TOK_INPUT_SEP])
             labels.extend([self.ignore_index, self.ignore_index])
@@ -99,7 +108,7 @@ class ArcBaselineTokenizer:
             input_ids.extend(grid_ids)
             labels.extend([self.ignore_index] * len(grid_ids))
             
-            # --- Separator ---
+            # --- Separator: "=>" ---
             input_ids.append(self.sep_ids[TOK_OUTPUT_SEP])
             labels.append(self.ignore_index)
             
@@ -113,7 +122,7 @@ class ArcBaselineTokenizer:
             # LABEL THE OUTPUT
             labels.extend(out_ids)
             
-            # --- Footer ---
+            # --- Footer: "\n\n" ---
             input_ids.append(self.sep_ids[TOK_PAIR_END])
             labels.append(self.sep_ids[TOK_PAIR_END])
 

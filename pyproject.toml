@@ -13,7 +13,10 @@ dependencies = [
     "numpy", 
     "matplotlib",
     "tqdm",
-    "transformers==4.57.3"
+    "transformers==4.57.3",
+    "accelerate==1.12.0",
+    "ipython==9.8.0",
+    "hf-transfer==0.1.9"
 ]
 
 # Optional: Add scripts to run your augmentation easily
