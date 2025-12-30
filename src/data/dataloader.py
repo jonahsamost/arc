@@ -3,11 +3,18 @@ import json
 import glob
 import math
 from torch.utils.data import IterableDataset, get_worker_info
+from src.data.tokenizer_2d import Arc2DTokenizer
+from src.data.tokenizer import ArcBaselineTokenizer
+
 
 class ArcDataset(IterableDataset):
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, baseline: bool = False):
         self.data_dir = data_dir
         self.shard_files = sorted(glob.glob(f"{data_dir}/*.jsonl"))
+        if baseline:
+            self.tokenizer = ArcBaselineTokenizer()
+        else:
+            self.tokenizer = Arc2DTokenizer()
         if not self.shard_files:
             raise FileNotFoundError(f"No .jsonl files found in {data_dir}")
 
@@ -29,11 +36,5 @@ class ArcDataset(IterableDataset):
                 for line in f:
                     if not line.strip(): 
                         continue
-                    
                     data = json.loads(line)
-                    yield self.transform(data)
-
-    def transform(self, raw_dict):
-        # Your padding / tensor conversion logic
-        # Return dict of tensors
-        return raw_dict
+                    yield self.tokenizer.build_sample(data['puzzle'])

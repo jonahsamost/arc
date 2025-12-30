@@ -2,6 +2,7 @@ src/data/re_arc_data
 src/data/arc_data_eval/
 src/data/arc_data_training/
 src/data/train_data/
+src/data/eval_data/
 *.pyc
 test.py
 __pycache__

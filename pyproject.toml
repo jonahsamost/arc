@@ -12,7 +12,8 @@ dependencies = [
     "torch>=2.0.0",
     "numpy", 
     "matplotlib",
-    "tqdm"
+    "tqdm",
+    "transformers==4.57.3"
 ]
 
 # Optional: Add scripts to run your augmentation easily
