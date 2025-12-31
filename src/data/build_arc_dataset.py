@@ -9,18 +9,17 @@ from src.data.re_arc.main import generate_dataset
 def baseline_eval_all_arc_1d(variant1=True, variant2=True):
     print('Getting baseline data')
     puzzles = get_arc_puzzles(variant1=variant1, variant2=variant2)
+    print(f'Loaded {len(puzzles)} puzzles')
     aug_puzzles = [({'puzzle': x}, filepath) for x, filepath in puzzles]
     output_path = shard_puzzles(aug_puzzles, training=False)
     return output_path
 
 
 def baseline_eval_arc1_1d():
-    print('Getting baseline data')
     return baseline_eval_all_arc_1d(variant1=True, variant2=False)
 
 
 def baseline_eval_arc2_1d():
-    print('Getting baseline data')
     return baseline_eval_all_arc_1d(variant1=False, variant2=True)
 
 
@@ -128,18 +127,30 @@ def load_rearc_puzzles(re_arc_path):
     return puzzles
 
 
+def load_concept_arc():
+    BASE_DIR = Path(__file__).resolve().parent
+    dpath = Path(BASE_DIR / 'arc_data_training/concept_arc')
+    return load_puzzles(dpath)
+
+def load_mini_arc():
+    BASE_DIR = Path(__file__).resolve().parent
+    dpath = Path(BASE_DIR / 'arc_data_training/mini_arc')
+    return load_puzzles(dpath)
+
+
 def load_arc_puzzles(variant: int = 1, training: bool = True):
-    puzzles = []
     BASE_DIR = Path(__file__).resolve().parent
     dpath = Path(BASE_DIR / ('arc_data_training' if training else 'arc_data_eval'))
+    dpath = dpath / f'arc_agi_{variant}'
     arc1 = variant == 1
     arc2 = variant == 2
     print(f'Using arc1: {arc1}, arc2: {arc2}, dpath: {dpath}')
+    return load_puzzles(dpath)
+
+
+def load_puzzles(dpath):
+    puzzles = []
     for filepath in dpath.rglob('*.json'):
-        if not arc1 and str(filepath).find('arc_agi_1') != -1:
-            continue
-        if not arc2 and str(filepath).find('arc_agi_2') != -1:
-            continue
         if filepath.is_file():
             with open(filepath, 'r') as fd:
                 data = json.loads(fd.read())
