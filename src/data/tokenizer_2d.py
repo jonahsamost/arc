@@ -24,6 +24,8 @@ class Arc2DTokenizer:
         pos_1d:         [seq_len] - sequential positions (0, 1, 2, ...)
         pos_2d:         [seq_len, 2] - (y, x) grid coordinates
         grid_mode:      [seq_len] - 0 for text tokens, 1 for grid pixels
+        output_mask:    [seq_len] - 1 for output grid pixels, 0 for everything else
+                                    (used for output-only loss computation)
     """
     
     # Logical token names (mapped to real IDs in __init__)
@@ -201,6 +203,7 @@ class Arc2DTokenizer:
         labels: List[int],
         pos_2d: List[tuple],
         grid_mode: List[int],
+        output_mask: List[int],
         label_value: int = IGNORE_INDEX
     ):
         """Helper to append text tokens (1D mode, positions zeroed)."""
@@ -209,6 +212,7 @@ class Arc2DTokenizer:
             labels.append(label_value)
             pos_2d.append((0, 0))  # 2D coords ignored in text mode
             grid_mode.append(0)    # Text mode
+            output_mask.append(0)  # Never output pixels
     
     def _append_grid_tokens(
         self,
@@ -217,6 +221,7 @@ class Arc2DTokenizer:
         labels: List[int],
         pos_2d: List[tuple],
         grid_mode: List[int],
+        output_mask: List[int],
         is_target: bool = False
     ):
         """Helper to append grid tokens with their 2D positions."""
@@ -225,6 +230,7 @@ class Arc2DTokenizer:
             labels.append(tid if is_target else IGNORE_INDEX)
             pos_2d.append(grid_data["pos_2d"][i])
             grid_mode.append(grid_data["grid_mode"][i])
+            output_mask.append(1 if is_target else 0)  # 1 only for output grid pixels
     
     def build_sample(
         self,
@@ -244,12 +250,13 @@ class Arc2DTokenizer:
             inference_mode: If True, stop after test input (don't include test output)
         
         Returns:
-            Dictionary with input_ids, labels, attention_mask, pos_1d, pos_2d, grid_mode
+            Dictionary with input_ids, labels, attention_mask, pos_1d, pos_2d, grid_mode, output_mask
         """
         input_ids = []
         labels = []
         pos_2d = []
         grid_mode = []
+        output_mask = []  # 1 for output grid pixels, 0 otherwise
         
         train_pairs = task_data.get('train', [])
         test_pairs = task_data.get('test', [])
@@ -266,7 +273,7 @@ class Arc2DTokenizer:
             self._append_text_tokens(
                 [self.structural_ids[self.TOK_PAIR_START], 
                  self.structural_ids[self.TOK_INPUT]],
-                input_ids, labels, pos_2d, grid_mode
+                input_ids, labels, pos_2d, grid_mode, output_mask
             )
             
             # === INPUT DIMENSIONS ===
@@ -274,32 +281,32 @@ class Arc2DTokenizer:
             in_grid = np.array(pair['input'])
             in_h, in_w = in_grid.shape
             dim_tokens = self.encode_dimensions(in_h, in_w)
-            self._append_text_tokens(dim_tokens, input_ids, labels, pos_2d, grid_mode)
+            self._append_text_tokens(dim_tokens, input_ids, labels, pos_2d, grid_mode, output_mask)
             
             # === INPUT GRID START ===
             self._append_text_tokens(
                 [self.structural_ids[self.TOK_GRID_START]],
-                input_ids, labels, pos_2d, grid_mode
+                input_ids, labels, pos_2d, grid_mode, output_mask
             )
             
             # === INPUT GRID PIXELS ===
             in_grid_data = self.serialize_grid(pair['input'])
             self._append_grid_tokens(
-                in_grid_data, input_ids, labels, pos_2d, grid_mode,
+                in_grid_data, input_ids, labels, pos_2d, grid_mode, output_mask,
                 is_target=False
             )
             
             # === INPUT GRID END ===
             self._append_text_tokens(
                 [self.structural_ids[self.TOK_GRID_END]],
-                input_ids, labels, pos_2d, grid_mode
+                input_ids, labels, pos_2d, grid_mode, output_mask
             )
             
             # === OUTPUT HEADER ===
             # "Output:"
             self._append_text_tokens(
                 [self.structural_ids[self.TOK_OUTPUT]],
-                input_ids, labels, pos_2d, grid_mode
+                input_ids, labels, pos_2d, grid_mode, output_mask
             )
             
             # === INFERENCE STOP ===
@@ -312,24 +319,26 @@ class Arc2DTokenizer:
             out_h, out_w = out_grid.shape
             out_dim_tokens = self.encode_dimensions(out_h, out_w)
             
-            # Dimensions ARE predicted (labeled)
+            # Dimensions ARE predicted (labeled) but NOT output_mask
+            # (they're metadata, not grid pixels)
             for tid in out_dim_tokens:
                 input_ids.append(tid)
                 labels.append(tid)  # Target!
                 pos_2d.append((0, 0))
                 grid_mode.append(0)
+                output_mask.append(0)  # Dimensions are NOT grid pixels
             
             # === OUTPUT GRID START ===
             self._append_text_tokens(
                 [self.structural_ids[self.TOK_GRID_START]],
-                input_ids, labels, pos_2d, grid_mode
+                input_ids, labels, pos_2d, grid_mode, output_mask
             )
             
             # === OUTPUT GRID PIXELS (PREDICTED) ===
             out_grid_data = self.serialize_grid(pair['output'])
             self._append_grid_tokens(
-                out_grid_data, input_ids, labels, pos_2d, grid_mode,
-                is_target=True  # These are prediction targets
+                out_grid_data, input_ids, labels, pos_2d, grid_mode, output_mask,
+                is_target=True  # These are prediction targets, output_mask=1
             )
             
             # === OUTPUT GRID END (PREDICTED) ===
@@ -338,6 +347,7 @@ class Arc2DTokenizer:
             labels.append(grid_end_id)  # Target!
             pos_2d.append((0, 0))
             grid_mode.append(0)
+            output_mask.append(0)  # Structural token, not grid pixel
             
             # === PAIR END ===
             pair_end_id = self.structural_ids[self.TOK_PAIR_END]
@@ -345,6 +355,7 @@ class Arc2DTokenizer:
             labels.append(pair_end_id)  # Target!
             pos_2d.append((0, 0))
             grid_mode.append(0)
+            output_mask.append(0)  # Structural token, not grid pixel
         
         # === FINAL TENSOR ASSEMBLY ===
         seq_len = len(input_ids)
@@ -356,31 +367,240 @@ class Arc2DTokenizer:
             "pos_1d": torch.arange(seq_len, dtype=torch.long),
             "pos_2d": torch.tensor(pos_2d, dtype=torch.long),  # [seq_len, 2]
             "grid_mode": torch.tensor(grid_mode, dtype=torch.long),  # [seq_len]
+            "output_mask": torch.tensor(output_mask, dtype=torch.long),  # [seq_len]
         }
     
     def build_fim_sample(
         self,
         task_data: Dict[str, List[Dict]],
-        mask_ratio: float = 0.3,
-        mask_type: str = "rectangular"
+        max_patch_h: int = 5,
+        max_patch_w: int = 5,
+        num_patches: int = 1,
     ) -> Dict[str, torch.Tensor]:
         """
-        Build a Fill-In-Middle sample for an ARC task.
+        Build a Fill-In-Middle sample with random rectangular patches.
         
-        Masks a portion of the output grid and creates FIM format:
-        <|fim_prefix|> [context + partial output] <|fim_suffix|> [rest] <|fim_middle|> [masked]
+        Randomly selects patches from input OR output grids and asks the model
+        to predict the masked pixels given surrounding context.
+        
+        Format (for causal attention compatibility):
+        <|fim_prefix|> [full context with patch pixels excluded]
+        <|fim_middle|> [patch pixels to predict]
         
         Args:
             task_data: ARC task data
-            mask_ratio: Approximate fraction of output to mask
-            mask_type: "rectangular", "rows", "columns", or "random"
+            max_patch_h: Maximum patch height (1 to max_patch_h)
+            max_patch_w: Maximum patch width (1 to max_patch_w)
+            num_patches: Number of patches to mask per sample
         
         Returns:
             Dictionary with FIM-formatted tensors
         """
-        # For now, build standard sample - FIM logic can be added
-        # This is a placeholder for the FIM training objective
-        raise NotImplementedError("FIM sample building not yet implemented")
+        import random
+        
+        input_ids = []
+        labels = []
+        pos_2d = []
+        grid_mode = []
+        output_mask = []  # Track which tokens are FIM targets (masked patch pixels)
+        
+        train_pairs = task_data.get('train', [])
+        test_pairs = task_data.get('test', [])
+        all_pairs = train_pairs + test_pairs
+        
+        if not all_pairs:
+            raise ValueError("Task data contains no pairs")
+        
+        # Get FIM token IDs
+        fim_prefix_ids = self.fim_ids[self.TOK_FIM_PREFIX]
+        fim_middle_ids = self.fim_ids[self.TOK_FIM_MIDDLE]
+        
+        # Randomly select which pair and which grid (input or output) to mask
+        pair_idx = random.randint(0, len(all_pairs) - 1)
+        mask_input = random.random() < 0.5  # 50% chance to mask input vs output
+        
+        # === FIM PREFIX: all context ===
+        for tid in fim_prefix_ids:
+            input_ids.append(tid)
+            labels.append(IGNORE_INDEX)
+            pos_2d.append((0, 0))
+            grid_mode.append(0)
+            output_mask.append(0)
+        
+        # Track which pixels to mask (will be shown in middle section)
+        masked_pixels = []  # List of (row, col, value, grid_row_offset)
+        
+        for i, pair in enumerate(all_pairs):
+            in_grid = np.array(pair['input'])
+            out_grid = np.array(pair['output'])
+            in_h, in_w = in_grid.shape
+            out_h, out_w = out_grid.shape
+            
+            # Determine if this pair has the masked region
+            is_masked_pair = (i == pair_idx)
+            
+            # Select patch location if this is the masked pair
+            patch_mask_in = None
+            patch_mask_out = None
+            
+            if is_masked_pair:
+                if mask_input:
+                    # Mask a patch in the input grid
+                    patch_h = random.randint(1, min(max_patch_h, in_h))
+                    patch_w = random.randint(1, min(max_patch_w, in_w))
+                    patch_r = random.randint(0, in_h - patch_h)
+                    patch_c = random.randint(0, in_w - patch_w)
+                    patch_mask_in = (patch_r, patch_c, patch_h, patch_w)
+                else:
+                    # Mask a patch in the output grid
+                    patch_h = random.randint(1, min(max_patch_h, out_h))
+                    patch_w = random.randint(1, min(max_patch_w, out_w))
+                    patch_r = random.randint(0, out_h - patch_h)
+                    patch_c = random.randint(0, out_w - patch_w)
+                    patch_mask_out = (patch_r, patch_c, patch_h, patch_w)
+            
+            # === PAIR HEADER ===
+            self._append_text_tokens(
+                [self.structural_ids[self.TOK_PAIR_START], 
+                 self.structural_ids[self.TOK_INPUT]],
+                input_ids, labels, pos_2d, grid_mode, output_mask
+            )
+            
+            # === INPUT GRID ===
+            dim_tokens = self.encode_dimensions(in_h, in_w)
+            self._append_text_tokens(dim_tokens, input_ids, labels, pos_2d, grid_mode, output_mask)
+            self._append_text_tokens(
+                [self.structural_ids[self.TOK_GRID_START]],
+                input_ids, labels, pos_2d, grid_mode, output_mask
+            )
+            
+            # Serialize input grid, excluding masked patch
+            self._serialize_grid_with_mask(
+                in_grid, patch_mask_in, masked_pixels,
+                input_ids, labels, pos_2d, grid_mode, output_mask,
+                is_target=False
+            )
+            
+            self._append_text_tokens(
+                [self.structural_ids[self.TOK_GRID_END]],
+                input_ids, labels, pos_2d, grid_mode, output_mask
+            )
+            
+            # === OUTPUT HEADER ===
+            self._append_text_tokens(
+                [self.structural_ids[self.TOK_OUTPUT]],
+                input_ids, labels, pos_2d, grid_mode, output_mask
+            )
+            
+            out_dim_tokens = self.encode_dimensions(out_h, out_w)
+            self._append_text_tokens(out_dim_tokens, input_ids, labels, pos_2d, grid_mode, output_mask)
+            self._append_text_tokens(
+                [self.structural_ids[self.TOK_GRID_START]],
+                input_ids, labels, pos_2d, grid_mode, output_mask
+            )
+            
+            # Serialize output grid, excluding masked patch
+            self._serialize_grid_with_mask(
+                out_grid, patch_mask_out, masked_pixels,
+                input_ids, labels, pos_2d, grid_mode, output_mask,
+                is_target=False
+            )
+            
+            self._append_text_tokens(
+                [self.structural_ids[self.TOK_GRID_END]],
+                input_ids, labels, pos_2d, grid_mode, output_mask
+            )
+            
+            # === PAIR END ===
+            self._append_text_tokens(
+                [self.structural_ids[self.TOK_PAIR_END]],
+                input_ids, labels, pos_2d, grid_mode, output_mask
+            )
+        
+        # === FIM MIDDLE: masked patch pixels to predict ===
+        for tid in fim_middle_ids:
+            input_ids.append(tid)
+            labels.append(IGNORE_INDEX)
+            pos_2d.append((0, 0))
+            grid_mode.append(0)
+            output_mask.append(0)
+        
+        # Add the masked pixels as prediction targets
+        for row, col, value, _ in masked_pixels:
+            token_id = self.digit_ids[int(np.clip(value, 0, 9))]
+            input_ids.append(token_id)
+            labels.append(token_id)  # PREDICTION TARGET
+            pos_2d.append((row, col))  # Preserve 2D position!
+            grid_mode.append(1)
+            output_mask.append(1)  # These ARE the output targets for FIM
+        
+        # End marker
+        grid_end_id = self.structural_ids[self.TOK_GRID_END]
+        input_ids.append(grid_end_id)
+        labels.append(grid_end_id)
+        pos_2d.append((0, 0))
+        grid_mode.append(0)
+        output_mask.append(0)  # Structural token
+        
+        seq_len = len(input_ids)
+        
+        return {
+            "input_ids": torch.tensor(input_ids, dtype=torch.long),
+            "labels": torch.tensor(labels, dtype=torch.long),
+            "attention_mask": torch.ones(seq_len, dtype=torch.long),
+            "pos_1d": torch.arange(seq_len, dtype=torch.long),
+            "pos_2d": torch.tensor(pos_2d, dtype=torch.long),
+            "grid_mode": torch.tensor(grid_mode, dtype=torch.long),
+            "output_mask": torch.tensor(output_mask, dtype=torch.long),
+            "is_fim": True,
+        }
+    
+    def _serialize_grid_with_mask(
+        self,
+        grid: np.ndarray,
+        patch_mask: Optional[tuple],  # (row, col, height, width) or None
+        masked_pixels: List,  # Accumulator for masked pixel info
+        input_ids: List,
+        labels: List,
+        pos_2d: List,
+        grid_mode: List,
+        output_mask: List,
+        is_target: bool = False,
+    ):
+        """
+        Serialize a grid, skipping pixels in the masked patch region.
+        Masked pixels are added to masked_pixels list for later prediction.
+        """
+        rows, cols = grid.shape
+        
+        for r in range(rows):
+            for c in range(cols):
+                val = int(np.clip(grid[r, c], 0, 9))
+                
+                # Check if this pixel is in the masked region
+                in_mask = False
+                if patch_mask is not None:
+                    pr, pc, ph, pw = patch_mask
+                    if pr <= r < pr + ph and pc <= c < pc + pw:
+                        in_mask = True
+                        # Save for prediction in middle section
+                        masked_pixels.append((r, c, val, 0))
+                
+                if not in_mask:
+                    # Add to prefix (visible context)
+                    token_id = self.digit_ids[val]
+                    input_ids.append(token_id)
+                    labels.append(token_id if is_target else IGNORE_INDEX)
+                    pos_2d.append((r, c))
+                    grid_mode.append(1)
+                    output_mask.append(0)  # Context pixels, not prediction targets
+            
+            # Row separator (newline)
+            input_ids.append(self.newline_id)
+            labels.append(IGNORE_INDEX)
+            pos_2d.append((r, cols))
+            grid_mode.append(1)
+            output_mask.append(0)
     
     def decode_grid(self, token_ids: List[int]) -> Optional[np.ndarray]:
         """

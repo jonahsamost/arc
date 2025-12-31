@@ -90,6 +90,7 @@ def train_epoch(
             model, batch, device,
             use_amp=config.use_amp,
             amp_dtype=config.torch_dtype,
+            loss_on_output_only=config.loss_on_output_only,
         )
         loss = loss / config.grad_accum_steps
         loss.backward()
@@ -142,6 +143,7 @@ def evaluate(model, dataloader, device: torch.device, config: TrainConfig) -> fl
                 model, batch, device,
                 use_amp=config.use_amp,
                 amp_dtype=config.torch_dtype,
+                loss_on_output_only=config.loss_on_output_only,
             )
             total_loss += loss.item()
             num_batches += 1
@@ -195,6 +197,7 @@ def train(config: TrainConfig) -> None:
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         shuffle_shards=True,
+        fim_ratio=config.fim_ratio,  # Mix of NTP and FIM samples
     )
     
     eval_dataloader = None
@@ -249,6 +252,8 @@ def train(config: TrainConfig) -> None:
     print(f"  Gradient accumulation: {config.grad_accum_steps}")
     print(f"  Effective batch size: {config.effective_batch_size}")
     print(f"  Learning rate: {config.lr}")
+    print(f"  FIM ratio: {config.fim_ratio:.0%}")
+    print(f"  Loss on output only: {config.loss_on_output_only}")
     print()
     
     best_eval_loss = float("inf")
@@ -311,10 +316,9 @@ def train(config: TrainConfig) -> None:
     print(f"{'=' * 60}")
 
 
-# def main():
-    # Default config - override data_dir as needed
-    # config = Phase1Config(data_dir='/root/arc_data/train_data')
-    # train(config)
+def main():
+    config = Phase1Config( data_dir='/root/arc_data/train_data')
+    train(config)
 
 
 # if __name__ == "__main__":

@@ -54,8 +54,8 @@ class TrainConfig:
     gradient_checkpointing: bool = True  # Trade compute for memory
     
     # === Loss Configuration ===
-    use_fim: bool = False  # Whether to use FIM loss in addition to NTP
-    fim_weight: float = 0.5  # Weight for FIM loss when used
+    fim_ratio: float = 0.5  # Fraction of samples to use FIM format (0=all NTP, 1=all FIM)
+    loss_on_output_only: bool = False  # If True, only compute loss on output grid pixels (not metadata)
     
     @property
     def effective_batch_size(self) -> int:
@@ -91,6 +91,7 @@ class Phase1Config(TrainConfig):
     phase: int = 1
     epochs: int = 3
     lr: float = 2e-5
+    fim_ratio=.5
 
 
 @dataclass
@@ -99,6 +100,7 @@ class Phase2Config(TrainConfig):
     phase: int = 2
     epochs: int = 2
     lr: float = 1e-5  # Lower LR for phase 2
+    loss_on_output_only: bool = True  # Focus loss on output grid pixels
 
 
 @dataclass  
@@ -107,4 +109,5 @@ class Phase3Config(TrainConfig):
     phase: int = 3
     epochs: int = 1
     lr: float = 5e-6  # Even lower LR for final phase
+    loss_on_output_only: bool = True  # Focus loss on output grid pixels
 

@@ -32,6 +32,7 @@ class ArcDataset(IterableDataset):
         baseline_1d: bool = False,
         raw: bool = False,
         shuffle_shards: bool = True,
+        fim_ratio: float = 0.0,  # Ratio of samples to convert to FIM format
     ):
         """
         Args:
@@ -41,11 +42,13 @@ class ArcDataset(IterableDataset):
             baseline_1d: If True, use 1D baseline tokenizer
             raw: If True, yield raw data without tokenization
             shuffle_shards: If True, shuffle shard order per epoch
+            fim_ratio: Fraction of samples to format as FIM (0.0 = all NTP, 1.0 = all FIM)
         """
         self.data_dir = data_dir
         self.shard_files = sorted(glob.glob(f"{data_dir}/*.jsonl"))
         self.raw = raw
         self.shuffle_shards = shuffle_shards
+        self.fim_ratio = fim_ratio
         
         if not self.shard_files:
             raise FileNotFoundError(f"No .jsonl files found in {data_dir}")
@@ -59,6 +62,8 @@ class ArcDataset(IterableDataset):
             self.tokenizer = Arc2DTokenizer(model_name=model_name)
         
         print(f"ArcDataset initialized with {len(self.shard_files)} shards from {data_dir}")
+        if fim_ratio > 0:
+            print(f"  FIM ratio: {fim_ratio:.0%} of samples will use FIM format")
     
     def __iter__(self):
         worker_info = get_worker_info()
@@ -95,7 +100,15 @@ class ArcDataset(IterableDataset):
                         yield data, filename
                     else:
                         try:
-                            sample = self.tokenizer.build_sample(data['puzzle'])
+                            # Randomly choose between NTP and FIM based on fim_ratio
+                            import random
+                            use_fim = self.fim_ratio > 0 and random.random() < self.fim_ratio
+                            
+                            if use_fim and hasattr(self.tokenizer, 'build_fim_sample'):
+                                sample = self.tokenizer.build_fim_sample(data['puzzle'])
+                            else:
+                                sample = self.tokenizer.build_sample(data['puzzle'])
+                            
                             yield sample, filename
                         except Exception as e:
                             # Skip malformed puzzles
@@ -110,7 +123,7 @@ def collate_arc_2d(batch: List[tuple]) -> Dict[str, torch.Tensor]:
     Handles variable-length sequences by padding to max length in batch.
     
     Input batch format: List of (sample_dict, filename) tuples
-    where sample_dict has: input_ids, labels, attention_mask, pos_1d, pos_2d, grid_mode
+    where sample_dict has: input_ids, labels, attention_mask, pos_1d, pos_2d, grid_mode, output_mask
     
     Output: Dict with batched tensors, all padded to max_seq_len
     """
@@ -128,6 +141,7 @@ def collate_arc_2d(batch: List[tuple]) -> Dict[str, torch.Tensor]:
     pos_1d = torch.zeros((batch_size, max_len), dtype=torch.long)
     pos_2d = torch.zeros((batch_size, max_len, 2), dtype=torch.long)
     grid_mode = torch.zeros((batch_size, max_len), dtype=torch.long)
+    output_mask = torch.zeros((batch_size, max_len), dtype=torch.long)
     
     for i, sample in enumerate(samples):
         seq_len = sample["input_ids"].size(0)
@@ -138,6 +152,7 @@ def collate_arc_2d(batch: List[tuple]) -> Dict[str, torch.Tensor]:
         pos_1d[i, :seq_len] = sample["pos_1d"]
         pos_2d[i, :seq_len] = sample["pos_2d"]
         grid_mode[i, :seq_len] = sample["grid_mode"]
+        output_mask[i, :seq_len] = sample["output_mask"]
     
     return {
         "input_ids": input_ids,
@@ -146,6 +161,7 @@ def collate_arc_2d(batch: List[tuple]) -> Dict[str, torch.Tensor]:
         "pos_1d": pos_1d,
         "pos_2d": pos_2d,
         "grid_mode": grid_mode,
+        "output_mask": output_mask,
         "filenames": filenames,
     }
 
@@ -185,6 +201,7 @@ def create_dataloader(
     num_workers: int = 4,
     baseline_1d: bool = False,
     shuffle_shards: bool = True,
+    fim_ratio: float = 0.0,
     **kwargs,
 ) -> DataLoader:
     """
@@ -197,6 +214,7 @@ def create_dataloader(
         num_workers: Number of data loading workers
         baseline_1d: Use 1D tokenizer
         shuffle_shards: Shuffle shard order
+        fim_ratio: Fraction of samples to use FIM format (0.0-1.0)
         **kwargs: Additional DataLoader kwargs
     
     Returns:
@@ -207,6 +225,7 @@ def create_dataloader(
         tokenizer=tokenizer,
         baseline_1d=baseline_1d,
         shuffle_shards=shuffle_shards,
+        fim_ratio=fim_ratio,
     )
     
     collate_fn = collate_arc_1d if baseline_1d else collate_arc_2d

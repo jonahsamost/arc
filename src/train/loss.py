@@ -19,6 +19,7 @@ def compute_ntp_loss(
     device: torch.device,
     use_amp: bool = True,
     amp_dtype: torch.dtype = torch.bfloat16,
+    loss_on_output_only: bool = False,
 ) -> torch.Tensor:
     """
     Compute Next Token Prediction loss.
@@ -28,10 +29,11 @@ def compute_ntp_loss(
     
     Args:
         model: The Qwen model with 2D RoPE surgery applied
-        batch: Collated batch with input_ids, labels, attention_mask, pos_1d, pos_2d, grid_mode
+        batch: Collated batch with input_ids, labels, attention_mask, pos_1d, pos_2d, grid_mode, output_mask
         device: Target device
         use_amp: Whether to use automatic mixed precision
         amp_dtype: Dtype for AMP (bfloat16 or float16)
+        loss_on_output_only: If True, only compute loss on output grid pixels (output_mask=1)
     
     Returns:
         Scalar loss tensor
@@ -63,6 +65,15 @@ def compute_ntp_loss(
             # Shift for next token prediction: predict token[i+1] from token[i]
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
+            
+            # If loss_on_output_only, mask out non-output tokens
+            if loss_on_output_only and "output_mask" in batch:
+                output_mask = batch["output_mask"].to(device)
+                # Shift output_mask to align with shifted labels
+                shift_output_mask = output_mask[..., 1:].contiguous()
+                # Set labels to -100 where output_mask is 0 (non-output tokens)
+                shift_labels = shift_labels.clone()
+                shift_labels[shift_output_mask == 0] = -100
             
             # Flatten for cross entropy
             vocab_size = shift_logits.size(-1)
