@@ -2,6 +2,8 @@ import shutil
 import json
 import random
 from pathlib import Path
+
+from torch.utils import data
 from src.data.common import ARCAugmenter
 from src.data.re_arc.main import generate_dataset
 
@@ -54,9 +56,14 @@ def get_arc_puzzles(variant1=True, variant2=True):
     return puzzles
 
 
-def generate_rearc_data(rearc_cnt: int = 10, num_augs: int = 10):
-    BASE_DIR = Path(__file__).resolve().parent
-    re_arc_dpath = Path(BASE_DIR / 're_arc_data')
+def get_rearc_path():
+    data_dir = get_data_dir()
+    re_arc_dpath = data_dir / 'arc_data_training/re_arc_data'
+    return re_arc_dpath
+
+
+def generate_rearc_data(rearc_cnt: int = 10):
+    re_arc_dpath = get_rearc_path()
     if re_arc_dpath.exists():
         try:
             shutil.rmtree(re_arc_dpath)
@@ -64,20 +71,23 @@ def generate_rearc_data(rearc_cnt: int = 10, num_augs: int = 10):
         except OSError as e:
             print(f"Error deleting {re_arc_dpath}: {e}")
     generate_dataset(path=re_arc_dpath, n_examples=rearc_cnt)
+    return re_arc_dpath
 
+
+def load_rearc_data(num_augs: int = 10):
+    re_arc_dpath = get_rearc_path()
     arc_aug = ARCAugmenter()
     puzzles = load_rearc_puzzles(re_arc_dpath)
     aug_puzzles = [
         (x, filepath) for puzz, filepath in puzzles
         for x in arc_aug.augment_puzzle(puzz, num_augmentations=num_augs)
     ]
-    output_path = shard_puzzles(aug_puzzles, training=True, output_name='rearc_train_data')
-    return output_path
+    return aug_puzzles
 
 
 
 def shard_puzzles(puzzles, training: bool=True, output_name: str = ''):
-    BASE_DIR = Path(__file__).resolve().parent
+    data_dir = get_data_dir()
     current_shard = 0
     current_count = 0
     if output_name:
@@ -85,7 +95,7 @@ def shard_puzzles(puzzles, training: bool=True, output_name: str = ''):
     else:
         out_path = 'train_data' if training else 'eval_data'
 
-    output_path = Path(BASE_DIR / out_path)
+    output_path = Path(data_dir / out_path)
     if output_path.exists():
         shutil.rmtree(output_path)
     output_path.mkdir(parents=True)
@@ -128,19 +138,25 @@ def load_rearc_puzzles(re_arc_path):
 
 
 def load_concept_arc():
-    BASE_DIR = Path(__file__).resolve().parent
-    dpath = Path(BASE_DIR / 'arc_data_training/concept_arc')
+    data_dir = get_data_dir()
+    dpath = Path(data_dir / 'arc_data_training/concept_arc')
     return load_puzzles(dpath)
 
 def load_mini_arc():
-    BASE_DIR = Path(__file__).resolve().parent
-    dpath = Path(BASE_DIR / 'arc_data_training/mini_arc')
+    data_dir = get_data_dir()
+    dpath = Path(data_dir / 'arc_data_training/mini_arc')
+    return load_puzzles(dpath)
+
+
+def load_kant_arc():
+    data_dir = get_data_dir()
+    dpath = Path(data_dir / 'arc_data_training/kant')
     return load_puzzles(dpath)
 
 
 def load_arc_puzzles(variant: int = 1, training: bool = True):
-    BASE_DIR = Path(__file__).resolve().parent
-    dpath = Path(BASE_DIR / ('arc_data_training' if training else 'arc_data_eval'))
+    data_dir = get_data_dir()
+    dpath = Path(data_dir / ('arc_data_training' if training else 'arc_data_eval'))
     dpath = dpath / f'arc_agi_{variant}'
     arc1 = variant == 1
     arc2 = variant == 2
@@ -156,3 +172,8 @@ def load_puzzles(dpath):
                 data = json.loads(fd.read())
                 puzzles.append((data, str(filepath)))
     return puzzles
+
+
+def get_data_dir():
+    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+    return BASE_DIR / 'arc_data'

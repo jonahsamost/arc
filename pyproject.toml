@@ -16,7 +16,8 @@ dependencies = [
     "transformers==4.57.3",
     "accelerate==1.12.0",
     "ipython==9.8.0",
-    "hf-transfer==0.1.9"
+    "hf-transfer==0.1.9",
+    "bitsandbytes>=0.41.0",
 ]
 
 # Optional: Add scripts to run your augmentation easily
