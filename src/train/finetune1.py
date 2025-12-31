@@ -86,6 +86,8 @@ def train_epoch(
     pbar = tqdm(dataloader, desc="Training")
     
     for batch_idx, batch in enumerate(pbar):
+        input_ids = batch["input_ids"]
+        print(f'input ids size: {input_ids.shape}')
         loss = compute_ntp_loss(
             model, batch, device,
             use_amp=config.use_amp,
@@ -97,6 +99,9 @@ def train_epoch(
         
         step_loss += loss.item()
         
+        # Free memory explicitly after each batch
+        del loss
+        
         if (batch_idx + 1) % config.grad_accum_steps == 0:
             # Gradient clipping
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
@@ -104,6 +109,10 @@ def train_epoch(
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
+            
+            # Periodic cache clear to reduce fragmentation
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
             
             global_step += 1
             total_loss += step_loss * config.grad_accum_steps
@@ -198,6 +207,7 @@ def train(config: TrainConfig) -> None:
         num_workers=config.num_workers,
         shuffle_shards=True,
         fim_ratio=config.fim_ratio,  # Mix of NTP and FIM samples
+        max_seq_length=config.max_seq_length,  # OOM protection
     )
     
     eval_dataloader = None
@@ -208,6 +218,7 @@ def train(config: TrainConfig) -> None:
             batch_size=config.batch_size,
             num_workers=config.num_workers,
             shuffle_shards=False,
+            max_seq_length=config.max_seq_length,
         )
     
     # Setup optimizer (8-bit AdamW if configured)

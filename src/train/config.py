@@ -23,6 +23,7 @@ class TrainConfig:
     # === Data ===
     data_dir: str = ""  # Required: directory containing training data shards
     eval_dir: Optional[str] = None  # Optional: evaluation data directory
+    max_seq_length: int = 16384  # Skip samples longer than this (OOM protection)
     
     # === Training Hyperparameters ===
     # Batch size: samples per forward pass. Larger = more efficient but more VRAM.
@@ -52,6 +53,11 @@ class TrainConfig:
     # === Memory Optimization ===
     use_8bit_adam: bool = True  # Use bitsandbytes 8-bit AdamW
     gradient_checkpointing: bool = True  # Trade compute for memory
+    
+    # === Distributed Training (FSDP) ===
+    distributed: bool = False  # Enable distributed training
+    sharding_strategy: str = "FULL_SHARD"  # FULL_SHARD, SHARD_GRAD_OP, NO_SHARD
+    cpu_offload: bool = False  # Offload params to CPU (slower but saves GPU memory)
     
     # === Loss Configuration ===
     fim_ratio: float = 0.5  # Fraction of samples to use FIM format (0=all NTP, 1=all FIM)

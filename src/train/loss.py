@@ -105,8 +105,11 @@ def _set_2d_positions(model, pos_2d: torch.Tensor, grid_mode: torch.Tensor) -> N
 def _clear_2d_positions(model) -> None:
     """Clear 2D position tensors from attention layers."""
     for layer in model.model.layers:
-        layer.self_attn._pos_2d = None
-        layer.self_attn._grid_mode = None
+        # Delete to allow GC, not just set to None
+        if hasattr(layer.self_attn, '_pos_2d'):
+            del layer.self_attn._pos_2d
+        if hasattr(layer.self_attn, '_grid_mode'):
+            del layer.self_attn._grid_mode
 
 
 def compute_fim_loss(

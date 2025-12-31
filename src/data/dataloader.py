@@ -33,6 +33,7 @@ class ArcDataset(IterableDataset):
         raw: bool = False,
         shuffle_shards: bool = True,
         fim_ratio: float = 0.0,  # Ratio of samples to convert to FIM format
+        max_seq_length: int = 16384,  # Skip samples longer than this
     ):
         """
         Args:
@@ -43,12 +44,14 @@ class ArcDataset(IterableDataset):
             raw: If True, yield raw data without tokenization
             shuffle_shards: If True, shuffle shard order per epoch
             fim_ratio: Fraction of samples to format as FIM (0.0 = all NTP, 1.0 = all FIM)
+            max_seq_length: Skip samples longer than this (OOM protection)
         """
         self.data_dir = data_dir
         self.shard_files = sorted(glob.glob(f"{data_dir}/*.jsonl"))
         self.raw = raw
         self.shuffle_shards = shuffle_shards
         self.fim_ratio = fim_ratio
+        self.max_seq_length = max_seq_length
         
         if not self.shard_files:
             raise FileNotFoundError(f"No .jsonl files found in {data_dir}")
@@ -108,6 +111,12 @@ class ArcDataset(IterableDataset):
                                 sample = self.tokenizer.build_fim_sample(data['puzzle'])
                             else:
                                 sample = self.tokenizer.build_sample(data['puzzle'])
+                            
+                            # Skip samples that are too long (OOM protection)
+                            # seq_len = sample["input_ids"].shape[0]
+                            # if seq_len > self.max_seq_length:
+                            #     print(f"Skipping {filename}: {seq_len} tokens > max {self.max_seq_length}")
+                            #     continue
                             
                             yield sample, filename
                         except Exception as e:
@@ -202,6 +211,7 @@ def create_dataloader(
     baseline_1d: bool = False,
     shuffle_shards: bool = True,
     fim_ratio: float = 0.0,
+    max_seq_length: int = 4096,
     **kwargs,
 ) -> DataLoader:
     """
@@ -215,6 +225,7 @@ def create_dataloader(
         baseline_1d: Use 1D tokenizer
         shuffle_shards: Shuffle shard order
         fim_ratio: Fraction of samples to use FIM format (0.0-1.0)
+        max_seq_length: Skip samples longer than this (OOM protection)
         **kwargs: Additional DataLoader kwargs
     
     Returns:
@@ -226,6 +237,7 @@ def create_dataloader(
         baseline_1d=baseline_1d,
         shuffle_shards=shuffle_shards,
         fim_ratio=fim_ratio,
+        max_seq_length=max_seq_length,
     )
     
     collate_fn = collate_arc_1d if baseline_1d else collate_arc_2d
