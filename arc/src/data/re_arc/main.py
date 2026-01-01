@@ -1,4 +1,5 @@
 import time
+import uuid
 import tqdm
 import os
 import json
@@ -137,7 +138,8 @@ def generate_dataset(
                 pbar.set_description(desc)
         end = time.time()
         stats['runtime'] = end - start
-        with open(os.path.join(tasks_path, f'{key}.json'), 'w') as fp:
+        filename =f'{key}_{str(uuid.uuid4())}.json'
+        with open(os.path.join(tasks_path, filename), 'w') as fp:
             json.dump(examples, fp)
         metadata[key] = stats
     with open(os.path.join(path, 'metadata.json'), 'w') as fp:

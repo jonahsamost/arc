@@ -414,27 +414,35 @@ def save_checkpoint(
     loss: float,
     path: str,
     phase: int = 1,
+    save_optimizer_state: bool = True,
 ):
     """
     Save training checkpoint.
     
+    Args:
+        save_optimizer_state: If False, only save model weights (~15GB vs ~76GB).
+                             Set False for final phase checkpoints to save disk.
+    
     Saves:
     - Model state dict
-    - Optimizer state dict
-    - Scheduler state dict
+    - Optimizer state dict (if save_optimizer_state=True)
+    - Scheduler state dict (if save_optimizer_state=True)
     - Training metadata
     """
     checkpoint = {
         "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+        "optimizer_state_dict": optimizer.state_dict() if save_optimizer_state else None,
+        "scheduler_state_dict": scheduler.state_dict() if scheduler and save_optimizer_state else None,
         "epoch": epoch,
         "step": step,
         "loss": loss,
         "phase": phase,
     }
     torch.save(checkpoint, path)
-    print(f"Checkpoint saved to {path}")
+    
+    import os
+    size_gb = os.path.getsize(path) / (1024**3)
+    print(f"Checkpoint saved to {path} ({size_gb:.1f} GB)")
 
 
 def load_checkpoint(

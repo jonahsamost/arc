@@ -18,6 +18,8 @@ dependencies = [
     "ipython==9.8.0",
     "hf-transfer==0.1.9",
     "bitsandbytes>=0.41.0",
+    "wandb==0.23.1",
+    "python-dotenv>=1.0.0",
 ]
 
 # Optional: Add scripts to run your augmentation easily

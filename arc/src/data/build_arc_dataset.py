@@ -62,9 +62,9 @@ def get_rearc_path():
     return re_arc_dpath
 
 
-def generate_rearc_data(rearc_cnt: int = 10):
+def generate_rearc_data(rearc_cnt: int = 10, delete=True):
     re_arc_dpath = get_rearc_path()
-    if re_arc_dpath.exists():
+    if delete and re_arc_dpath.exists():
         try:
             shutil.rmtree(re_arc_dpath)
             print(f"Cleaned up existing directory: {re_arc_dpath}")
@@ -112,28 +112,112 @@ def shard_puzzles(puzzles, training: bool=True, output_name: str = ''):
     return output_path
 
 
-def load_rearc_puzzles(re_arc_path):
+def sample_puzzle_size() -> tuple[int, int]:
+    """
+    Sample number of training and test examples with a realistic distribution.
+    
+    Distribution designed so:
+    - Most puzzles: 3-5 training, 1 test (common case)
+    - Some puzzles: more examples (so model learns longer formats)
+    
+    Returns:
+        (num_train, num_test)
+    """
+    # Training examples distribution (weighted toward 3-5)
+    train_weights = {
+        2: 5,    # 5%
+        3: 25,   # 25%
+        4: 30,   # 30%
+        5: 20,   # 20%
+        6: 10,   # 10%
+        7: 5,    # 5%
+        8: 3,    # 3%
+        9: 1,    # 1%
+        10: 1,   # 1%
+    }
+    
+    # Test examples distribution (mostly 1)
+    test_weights = {
+        1: 80,   # 80%
+        2: 15,   # 15%
+        3: 5,    # 5%
+    }
+    
+    train_choices = list(train_weights.keys())
+    train_probs = [train_weights[k] for k in train_choices]
+    num_train = random.choices(train_choices, weights=train_probs, k=1)[0]
+    
+    test_choices = list(test_weights.keys())
+    test_probs = [test_weights[k] for k in test_choices]
+    num_test = random.choices(test_choices, weights=test_probs, k=1)[0]
+    
+    return num_train, num_test
+
+
+def load_rearc_puzzles(re_arc_path, examples_per_puzzle: int = None):
+    """
+    Load RE-ARC generated examples and create puzzles with varied sizes.
+    
+    Args:
+        re_arc_path: Path to RE-ARC data
+        examples_per_puzzle: If set, use fixed size. If None, sample from distribution.
+    
+    Returns:
+        List of (puzzle_dict, filepath) tuples
+    """
     puzzles = []
     path = re_arc_path / 'tasks'
+    
     for filepath in path.rglob('*.json'):
         if filepath.is_file():
             with open(filepath, 'r') as fd:
-                examples = json.loads(fd.read())
-                random.shuffle(examples)
-                leftover = examples
-                while leftover:
-                    num_train = random.randint(2, 5)
+                all_examples = json.loads(fd.read())
+            
+            if len(all_examples) < 3:
+                # Need at least 2 train + 1 test
+                continue
+            
+            random.shuffle(all_examples)
+            
+            # Create multiple puzzles from the pool of examples
+            idx = 0
+            puzzle_num = 0
+            
+            while idx < len(all_examples):
+                # Sample puzzle size
+                if examples_per_puzzle:
+                    num_train = examples_per_puzzle - 1
                     num_test = 1
-                    cnt = num_train + num_test
-                    if cnt >= len(leftover):
+                else:
+                    num_train, num_test = sample_puzzle_size()
+                
+                total_needed = num_train + num_test
+                
+                # Check if we have enough examples left
+                if idx + total_needed > len(all_examples):
+                    # Use remaining examples if enough for minimal puzzle
+                    remaining = len(all_examples) - idx
+                    if remaining >= 3:  # At least 2 train + 1 test
+                        num_test = min(num_test, remaining // 3)
+                        num_train = remaining - num_test
+                    else:
                         break
-                    selection = leftover[:cnt]
-                    task = {
-                        "train": selection[:cnt - 1],
-                        "test": selection[cnt - 1:]
-                    }
-                    leftover = leftover[cnt:]
-                    puzzles.append((task, str(filepath)))
+                
+                # Extract examples for this puzzle
+                train_examples = all_examples[idx:idx + num_train]
+                test_examples = all_examples[idx + num_train:idx + num_train + num_test]
+                
+                task = {
+                    "train": train_examples,
+                    "test": test_examples
+                }
+                
+                puzzle_id = f"{filepath.stem}_p{puzzle_num}"
+                puzzles.append((task, puzzle_id))
+                
+                idx += num_train + num_test
+                puzzle_num += 1
+    
     return puzzles
 
 

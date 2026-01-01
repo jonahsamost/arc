@@ -60,7 +60,7 @@ def find_longest_sequences(data_dir: str, top_k: int = 10):
         data_dir: Directory containing .jsonl shards
         top_k: Number of longest sequences to report
     """
-    shard_files = sorted(glob.glob(f"{data_dir}/*.jsonl"))
+    shard_files = sorted(glob.glob(f"{data_dir}/*.json*"))
     
     if not shard_files:
         print(f"No .jsonl files found in {data_dir}")
@@ -72,8 +72,23 @@ def find_longest_sequences(data_dir: str, top_k: int = 10):
     # First pass: estimate sizes without tokenization
     candidates = []  # (estimated_size, puzzle_data, filename)
     total_puzzles = 0
-    
-    for shard_file in tqdm(shard_files, desc="Scanning shards"):
+    max_estimate = 0
+
+    # for shard_file in tqdm(shard_files, desc="scanning shards"):
+    #     with open(shard_file, 'r') as f:
+    #         try:
+    #             puzzle = json.loads(f.read())
+    #             est_size = estimate_puzzle_size(puzzle)
+    #             max_estimate = max(max_estimate, est_size)
+    #             continue
+    #             candidates.append((est_size, puzzle, filename))
+    #             total_puzzles += 1
+    #         except Exception as e:
+    #             continue
+
+    above = 0
+    max_seq_length = 12288
+    for shard_file in tqdm(shard_files, desc="scanning shards"):
         with open(shard_file, 'r') as f:
             for line in f:
                 if not line.strip():
@@ -82,9 +97,13 @@ def find_longest_sequences(data_dir: str, top_k: int = 10):
                     data, filename = json.loads(line)
                     puzzle = data['puzzle']
                     est_size = estimate_puzzle_size(puzzle)
+                    if est_size >= max_seq_length:
+                        above += 1
+                    max_estimate = max(max_estimate, est_size)
+                    continue
                     candidates.append((est_size, puzzle, filename))
                     total_puzzles += 1
-                except (json.JSONDecodeError, ValueError, KeyError):
+                except (json.jsondecodeerror, valueerror, keyerror):
                     continue
     
     print(f"\nTotal puzzles: {total_puzzles}")

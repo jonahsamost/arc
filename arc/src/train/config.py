@@ -41,9 +41,17 @@ class TrainConfig:
     
     # === Logging and Saving ===
     output_dir: str = "./checkpoints"  # Output directory for checkpoints
-    save_steps: int = 500  # Save checkpoint every N steps
-    log_steps: int = 10  # Log metrics every N steps
-    eval_steps: int = 500  # Evaluate every N steps
+    save_steps: int = 10000  # Save checkpoint every N steps
+    log_steps: int = 100  # Log metrics every N steps
+    eval_steps: int = 1000  # Evaluate every N steps (quick sampled eval)
+    eval_samples: Optional[int] = 100  # Samples per eval (None = full eval set)
+    save_optimizer_state: bool = False  # Model-only checkpoints (~15GB vs ~76GB)
+    
+    # === Weights & Biases ===
+    use_wandb: bool = True  # Enable W&B logging
+    wandb_project: str = "arc_agi"  # W&B project name
+    wandb_run_name: Optional[str] = None  # Run name (auto-generated if None)
+    wandb_entity: Optional[str] = None  # W&B team/entity (None = personal)
     
     # === Hardware ===
     num_workers: int = 4  # DataLoader workers
@@ -53,6 +61,10 @@ class TrainConfig:
     # === Memory Optimization ===
     use_8bit_adam: bool = True  # Use bitsandbytes 8-bit AdamW
     gradient_checkpointing: bool = True  # Trade compute for memory
+    
+    # === Performance Optimization ===
+    use_torch_compile: bool = True  # Use torch.compile for faster training (1.5-2x speedup)
+    compile_mode: str = "default"  # "default", "reduce-overhead", or "max-autotune"
     
     # === Distributed Training (FSDP) ===
     distributed: bool = False  # Enable distributed training

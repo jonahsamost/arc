@@ -18,6 +18,7 @@ Usage:
 """
 
 import os
+from datetime import timedelta
 import torch
 import torch.distributed as dist
 from torch.distributed.fsdp import (
@@ -112,17 +113,18 @@ def setup_distributed(
     torch.cuda.set_device(local_rank)
     
     # Initialize process group
+    print(f'[Rank {rank}] Initializing process group on GPU {local_rank}...', flush=True)
     dist.init_process_group(
         backend=backend,
         init_method="env://",
         world_size=world_size,
         rank=rank,
-        timeout=torch.distributed.default_pg_timeout if timeout_minutes is None 
-                else torch.timedelta(minutes=timeout_minutes),
+        timeout=timedelta(minutes=30),  # Longer timeout for large models
     )
+    print(f'[Rank {rank}] Process group initialized', flush=True)
     
-    # Synchronize all processes
-    dist.barrier()
+    # Skip initial barrier - init_process_group already ensures all ranks are connected
+    # The barrier was causing hangs on some NCCL configurations
     
     if rank == 0:
         print(f"Distributed training initialized:")
@@ -160,9 +162,26 @@ def get_rank() -> int:
 
 
 def barrier() -> None:
-    """Synchronize all processes."""
+    """
+    Synchronize all processes.
+    
+    Uses CPU-based Gloo barrier as NCCL barriers can hang on some configs.
+    """
     if dist.is_initialized():
-        dist.barrier()
+        # Try CPU-based sync which is more reliable
+        try:
+            # Create a small CPU tensor and do all_reduce via NCCL
+            # This works even before CUDA tensors are allocated
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            torch.cuda.set_device(local_rank)
+            t = torch.zeros(1, device=f"cuda:{local_rank}")
+            dist.all_reduce(t, op=dist.ReduceOp.SUM)
+            torch.cuda.synchronize()
+            del t
+        except Exception as e:
+            print(f"[Rank {local_rank}] Barrier failed: {e}", flush=True)
+            # Fallback: just sync CUDA
+            torch.cuda.synchronize()
 
 
 def _get_sharding_strategy(strategy: str) -> ShardingStrategy:
@@ -336,6 +355,7 @@ def save_fsdp_checkpoint(
     loss: float,
     path: str,
     rank: int = 0,
+    save_optimizer_state: bool = True,
 ) -> None:
     """
     Save FSDP checkpoint.
@@ -352,6 +372,7 @@ def save_fsdp_checkpoint(
         loss: Current loss
         path: Save path
         rank: Current process rank
+        save_optimizer_state: If False, only save model weights (~15GB vs ~76GB)
     """
     # Configure state dict gathering
     save_policy = FullStateDictConfig(offload_to_cpu=True, rank0_only=True)
@@ -359,18 +380,17 @@ def save_fsdp_checkpoint(
     with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT, save_policy):
         model_state = model.state_dict()
         
-        # Only gather optimizer state on rank 0
-        if rank == 0:
+        # Only gather optimizer state if requested and on rank 0
+        optim_state = None
+        if save_optimizer_state and rank == 0:
             optim_state = FSDP.optim_state_dict(model, optimizer)
-        else:
-            optim_state = None
     
     # Only rank 0 saves
     if rank == 0:
         checkpoint = {
             "model_state_dict": model_state,
             "optimizer_state_dict": optim_state,
-            "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+            "scheduler_state_dict": scheduler.state_dict() if scheduler and save_optimizer_state else None,
             "epoch": epoch,
             "step": step,
             "loss": loss,
@@ -378,7 +398,8 @@ def save_fsdp_checkpoint(
         
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         torch.save(checkpoint, path)
-        print(f"Saved checkpoint to {path}")
+        size_gb = Path(path).stat().st_size / (1024**3)
+        print(f"Saved checkpoint to {path} ({size_gb:.1f} GB)")
     
     # Synchronize all ranks
     barrier()

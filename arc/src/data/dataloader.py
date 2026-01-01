@@ -112,11 +112,12 @@ class ArcDataset(IterableDataset):
                             else:
                                 sample = self.tokenizer.build_sample(data['puzzle'])
                             
-                            # Skip samples that are too long (OOM protection)
-                            # seq_len = sample["input_ids"].shape[0]
-                            # if seq_len > self.max_seq_length:
-                            #     print(f"Skipping {filename}: {seq_len} tokens > max {self.max_seq_length}")
-                            #     continue
+                            # Note: Long sequences are now handled by chunked cross-entropy
+                            # Only skip extremely long sequences (>16K) as a safety limit
+                            seq_len = sample["input_ids"].shape[0]
+                            if seq_len > self.max_seq_length:
+                                print(f"[Warning] Skipping {filename}: {seq_len} tokens > max {self.max_seq_length}")
+                                continue
                             
                             yield sample, filename
                         except Exception as e:
