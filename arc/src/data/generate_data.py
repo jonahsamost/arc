@@ -285,7 +285,7 @@ def generate_phase1_streaming(
     return output_path
 
 
-def generate_1m_samples(max_seq_length: int = 12288):
+def generate_1m_samples(max_seq_length: int = 1024 * 10):
     """
     Quick function to generate ~1M samples.
     

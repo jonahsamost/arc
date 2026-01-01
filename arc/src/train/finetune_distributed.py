@@ -732,8 +732,8 @@ def main():
         batch_size=1,  # batch=2 OOMs on 11K sequences during backward
         grad_accum_steps=4,  # Effective batch = 1 × 4 × 8 = 32
         lr=2e-5,
-        max_steps=30_000,
-        max_seq_length=12288,  # Chunked CE handles sequences up to this
+        max_steps=20_000,
+        max_seq_length=1024 * 10,  # Chunked CE handles sequences up to this
     )
     
     train(config)

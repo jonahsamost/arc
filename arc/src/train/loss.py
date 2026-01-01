@@ -125,12 +125,8 @@ def compute_ntp_loss(
                 ignore_index=-100,
             )
     
-    # NOTE: We intentionally do NOT clear 2D positions here!
-    # With gradient checkpointing, backward() recomputes forward passes,
-    # and those recomputations need access to _pos_2d and _grid_mode.
-    # The positions are overwritten on the next forward call anyway.
     rank = int(os.environ.get("RANK", 0))
-    print(f"[Rank {rank}] [Loss] compute_ntp_loss returning, loss={loss.item():.4f}", flush=True)
+    # print(f"[Rank {rank}] [Loss] compute_ntp_loss returning, loss={loss.item():.4f}", flush=True)
     return loss
 
 
