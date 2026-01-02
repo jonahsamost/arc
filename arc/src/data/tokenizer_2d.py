@@ -41,7 +41,7 @@ class Arc2DTokenizer:
     TOK_FIM_MIDDLE = "<|fim_middle|>"
     TOK_FIM_SUFFIX = "<|fim_suffix|>"
     
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-Coder-7B-Instruct"):
+    def __init__(self, model_name: str = "Qwen/Qwen3-4B-Thinking-2507"):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         self.model_name = model_name
         

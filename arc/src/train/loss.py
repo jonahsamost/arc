@@ -71,6 +71,7 @@ def compute_ntp_loss(
     with autocast(device_type=device_type, dtype=amp_dtype, enabled=use_amp):
         if _DEBUG_FORWARD and rank == 0:
             print(f"[Loss] Inside autocast, calling model()...", flush=True)
+        print(f'shapes: input_ids: {input_ids.shape}, attn: {attention_mask.shape}, pos: {pos_1d.shape}')
         outputs = model(
             input_ids=input_ids,
             attention_mask=attention_mask,

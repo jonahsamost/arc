@@ -331,7 +331,11 @@ class Qwen2DAttention(nn.Module):
         )
         
         attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
+        # Reshape: [bsz, seq_len, num_heads, head_dim] -> [bsz, seq_len, num_heads * head_dim]
+        # Note: num_heads * head_dim may differ from hidden_size (e.g., in some model configs)
+        # The o_proj layer will project from num_heads * head_dim back to hidden_size
+        actual_seq_len = attn_output.size(1)
+        attn_output = attn_output.reshape(bsz, actual_seq_len, self.num_heads * self.head_dim)
         attn_output = self.o_proj(attn_output)
         
         # Qwen2DecoderLayer expects (attn_output, attn_weights) - only 2 values

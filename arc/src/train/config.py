@@ -18,12 +18,12 @@ class TrainConfig:
     checkpoint: Optional[str] = None  # Path to checkpoint for phases 2+
     
     # === Model ===
-    model_name: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    model_name: str = "Qwen/Qwen3-4B-Thinking-2507"
     
     # === Data ===
     data_dir: str = ""  # Required: directory containing training data shards
     eval_dir: Optional[str] = None  # Optional: evaluation data directory
-    max_seq_length: int = 16384  # Skip samples longer than this (OOM protection)
+    max_seq_length: int = 1024 * 10  # Skip samples longer than this (OOM protection)
     
     # === Training Hyperparameters ===
     # Batch size: samples per forward pass. Larger = more efficient but more VRAM.
@@ -35,14 +35,14 @@ class TrainConfig:
     epochs: int = 1  # Number of training epochs
     max_steps: Optional[int] = None  # Max steps (overrides epochs if set)
     lr: float = 2e-5  # Peak learning rate
-    warmup_steps: int = 100  # Warmup steps
+    warmup_steps: int = 1000  # Warmup steps
     weight_decay: float = 0.01  # Weight decay
     max_grad_norm: float = 1.0  # Max gradient norm for clipping
     
     # === Logging and Saving ===
     output_dir: str = "./checkpoints"  # Output directory for checkpoints
     save_steps: int = 10000  # Save checkpoint every N steps
-    log_steps: int = 100  # Log metrics every N steps
+    log_steps: int = 10  # Log metrics every N steps
     eval_steps: int = 1000  # Evaluate every N steps (quick sampled eval)
     eval_samples: Optional[int] = 100  # Samples per eval (None = full eval set)
     save_optimizer_state: bool = False  # Model-only checkpoints (~15GB vs ~76GB)
@@ -63,7 +63,7 @@ class TrainConfig:
     gradient_checkpointing: bool = True  # Trade compute for memory
     
     # === Performance Optimization ===
-    use_torch_compile: bool = True  # Use torch.compile for faster training (1.5-2x speedup)
+    use_torch_compile: bool = False # Use torch.compile for faster training (1.5-2x speedup)
     compile_mode: str = "default"  # "default", "reduce-overhead", or "max-autotune"
     
     # === Distributed Training (FSDP) ===

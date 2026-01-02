@@ -260,7 +260,7 @@ def train_epoch(
         # print(f'[Rank {rank}] compute_ntp_loss returned, loss={loss.item():.4f}', flush=True)
         
         # Clean up memory before backward
-        if device.type == "cuda":
+        if config.distributed and device.type == "cuda":
             torch.cuda.synchronize()
             # print(f'[Rank {rank}] CUDA synchronized before backward', flush=True)
         
@@ -338,7 +338,7 @@ def train_epoch(
             # Log to console and W&B
             if global_step % config.log_steps == 0:
                 if is_main_process():
-                    print(f'[Step {global_step}] loss={batch_loss:.4f}, step_time={step_time:.2f}s', flush=True)
+                    print(f'[Step {global_step}] loss={batch_loss:.4f}, grad_norm={grad_norm_float:.2f}, step_time={step_time:.2f}s', flush=True)
                     pbar.set_postfix({
                         "step": global_step,
                         "loss": f"{batch_loss:.4f}",
@@ -572,7 +572,7 @@ def train(config: TrainConfig) -> None:
     
     warmup_scheduler = LinearLR(
         optimizer,
-        start_factor=0.1,
+        start_factor=0.01,
         end_factor=1.0,
         total_iters=config.warmup_steps,
     )
@@ -728,7 +728,7 @@ def main():
     config = Phase1Config(
         data_dir="/root/arc_data/train_data",
         eval_dir="/root/arc_data/eval_data",
-        distributed=True,  # Set to True for multi-GPU
+        distributed=False,
         batch_size=1,  # batch=2 OOMs on 11K sequences during backward
         grad_accum_steps=4,  # Effective batch = 1 × 4 × 8 = 32
         lr=2e-5,
@@ -739,6 +739,5 @@ def main():
     train(config)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
-
