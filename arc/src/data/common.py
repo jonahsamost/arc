@@ -36,9 +36,11 @@ class ARCAugmenter:
             
         return trans_id, mapping
 
-    def apply_canvas_jitter(self, input_grid: np.ndarray, output_grid: np.ndarray, no_jitter: bool = False):
+    def apply_canvas_jitter_legacy(self, input_grid: np.ndarray, output_grid: np.ndarray, no_jitter: bool = False):
         """
-        Pads both grids to 30x30.
+        LEGACY: Pads both grids to 30x30.
+        WARNING: This inflates token count by ~30x! Use apply_transform instead.
+        
         If shapes match, applies the SAME random translation (Jitter) to both.
         If shapes differ, centers them
         """
@@ -82,11 +84,23 @@ class ARCAugmenter:
         puzzle: dict, 
         num_augmentations: int = 1,
         augment: bool = True,  # Controls Color/Rotation
-        jitter: bool = True    # Controls Position (Random vs Top-Left)
+        jitter: bool = False   # DEPRECATED: Canvas jitter inflates tokens 30x, disabled by default
     ) -> list:
+        """
+        Augment a puzzle with color permutation and dihedral transforms.
+        
+        Args:
+            puzzle: Dict with 'train' and 'test' keys containing input/output pairs
+            num_augmentations: Number of augmented versions to generate
+            augment: If True, apply random color permutation and rotation/flip
+            jitter: DEPRECATED - If True, pads to 30x30 canvas (inflates tokens ~30x!)
+        
+        Returns:
+            List of dicts with 'aug_id', 'puzzle', 'og_dims' keys
+        """
         augmented_data = []
 
-        for _ in range(num_augmentations):
+        for aug_idx in range(num_augmentations):
             # 1. Augmentation Params (Color/Rotation)
             # If augment=False, we force Identity (trans_id=0, mapping=0..9)
             trans_id, mapping = self.generate_augmentation_params(augment=augment)
@@ -121,11 +135,14 @@ class ARCAugmenter:
                 out_arr = self.dihedral_transform(out_arr, trans_id)
                 
                 # --- STEP 2: Layout ( Controlled by `jitter` ) ---
-                # We ALWAYS apply this function to get 30x30, 
-                # but `no_jitter` decides where the grid goes.
-                in_arr, out_arr = self.apply_canvas_jitter(
-                    in_arr, out_arr, no_jitter=(not jitter)
-                )
+                # NOTE: Canvas jitter is DISABLED by default because it inflates
+                # every grid to 30x30, causing ~30x token inflation!
+                # Only use for legacy compatibility.
+                if jitter:
+                    in_arr, out_arr = self.apply_canvas_jitter_legacy(
+                        in_arr, out_arr, no_jitter=False
+                    )
+                # else: keep original dimensions (RECOMMENDED)
                 
                 new_pair = {'input': in_arr.tolist(), 'output': out_arr.tolist()}
                 

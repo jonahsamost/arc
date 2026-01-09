@@ -15,6 +15,7 @@ Design (Pure Mode Switching):
 """
 
 import torch
+from torch._dynamo import mark_dynamic
 import torch.nn as nn
 from typing import Optional, Tuple, Dict, Any
 from transformers import AutoModelForCausalLM, AutoConfig
@@ -192,6 +193,7 @@ def apply_rotary_pos_emb_2d(
     
     q_embed = mask * q_2d + (1 - mask) * q_1d
     k_embed = mask * k_2d + (1 - mask) * k_1d
+    del q_1d, k_1d, q_2d, k_2d, mask  # Free intermediate tensors
     
     return q_embed, k_embed
 
@@ -359,7 +361,7 @@ def apply_rope_surgery(model) -> None:
 
 
 def load_qwen_2d(
-    model_name: str = "Qwen/Qwen2.5-Coder-7B-Instruct",
+    model_name: str = "Qwen/Qwen3-4B-Thinking-2507",
     tokenizer_2d = None,
     checkpoint_path: Optional[str] = None,
     dtype: torch.dtype = torch.bfloat16,
@@ -458,13 +460,22 @@ def load_checkpoint(
     """
     Load training checkpoint.
     
+    Handles checkpoints saved with torch.compile (strips _orig_mod. prefix).
+    
     Returns metadata dict with epoch, step, loss, phase.
     """
     checkpoint = torch.load(path, map_location="cpu")
     
-    model.load_state_dict(checkpoint["model_state_dict"])
+    state_dict = checkpoint["model_state_dict"]
     
-    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+    # Handle torch.compile checkpoints: strip _orig_mod. prefix from keys
+    # if any(k.startswith("_orig_mod.") for k in state_dict.keys()):
+    #     print("Detected torch.compile checkpoint, stripping _orig_mod. prefix...")
+    #     state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+    
+    model.load_state_dict(state_dict)
+    
+    if optimizer is not None and checkpoint.get("optimizer_state_dict"):
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     
     if scheduler is not None and checkpoint.get("scheduler_state_dict"):

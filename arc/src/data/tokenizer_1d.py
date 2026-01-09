@@ -11,7 +11,7 @@ TOK_OUTPUT_SEP = "<|output|>"
 TOK_PAIR_END   = "<|pair_end|>"
 
 class ArcBaselineTokenizer:
-    def __init__(self, model_name="Qwen/Qwen2.5-Coder-7B-Instruct"):
+    def __init__(self, model_name="Qwen/Qwen3-4B-Thinking-2507"):
         # Load the standard tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
         

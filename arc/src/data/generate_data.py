@@ -285,7 +285,7 @@ def generate_phase1_streaming(
     return output_path
 
 
-def generate_1m_samples(max_seq_length: int = 1024 * 10):
+def generate_1m_samples(max_seq_length: int = 1024 * 8):
     """
     Quick function to generate ~1M samples.
     
@@ -294,7 +294,7 @@ def generate_1m_samples(max_seq_length: int = 1024 * 10):
                        Default 12288 matches training config.
     """
     return generate_phase1_streaming(
-        rearc_examples_per_task=2500,
+        rearc_examples_per_task=2000,
         num_augmentations=10,
         include_kant=True,
         kant_samples=400_000,

@@ -16,7 +16,6 @@ from typing import Dict, Any, Optional
 # Debug flag - set to True to see detailed forward pass logging
 _DEBUG_FORWARD = False
 
-
 def compute_ntp_loss(
     model,
     batch: Dict[str, torch.Tensor],
@@ -54,6 +53,23 @@ def compute_ntp_loss(
     pos_2d = batch["pos_2d"].to(device)
     grid_mode = batch["grid_mode"].to(device)
     
+    # Mark sequence dimension (dim 1) as dynamic for torch.compile
+    # This allows compiled model to handle variable sequence lengths efficiently
+    # Mark at entry point so it propagates through entire computation graph
+    try:
+        from torch._dynamo import mark_dynamic
+        mark_dynamic(input_ids, 1)  # [batch, seq_len] - mark seq_len as dynamic
+        mark_dynamic(labels, 1)  # [batch, seq_len]
+        mark_dynamic(attention_mask, 1)  # [batch, seq_len]
+        mark_dynamic(pos_1d, 1)  # [batch, seq_len]
+        if pos_2d is not None and pos_2d.dim() >= 2:
+            mark_dynamic(pos_2d, 1)  # [batch, seq_len, 2]
+        if grid_mode is not None and grid_mode.dim() >= 2:
+            mark_dynamic(grid_mode, 1)  # [batch, seq_len]
+    except ImportError:
+        # mark_dynamic not available (older PyTorch or not using compile)
+        pass
+    
     if _DEBUG_FORWARD and rank == 0:
         print(f"[Loss] Tensors on device. input_ids shape: {input_ids.shape}", flush=True)
     
@@ -71,7 +87,11 @@ def compute_ntp_loss(
     with autocast(device_type=device_type, dtype=amp_dtype, enabled=use_amp):
         if _DEBUG_FORWARD and rank == 0:
             print(f"[Loss] Inside autocast, calling model()...", flush=True)
-        print(f'shapes: input_ids: {input_ids.shape}, attn: {attention_mask.shape}, pos: {pos_1d.shape}')
+        
+        # Clear cache before forward to maximize available memory
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        
         outputs = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -81,9 +101,20 @@ def compute_ntp_loss(
         if _DEBUG_FORWARD and rank == 0:
             print(f"[Loss] model() returned!", flush=True)
         
+        # Clear cache after forward to free any temporary allocations
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        
         # Extract logits and immediately free model outputs to save memory
         logits = outputs.logits
         del outputs
+        
+        # Mark logits sequence dimension as dynamic (for loss computation)
+        try:
+            from torch._dynamo import mark_dynamic
+            mark_dynamic(logits, 1)  # [batch, seq_len, vocab_size] - mark seq_len as dynamic
+        except ImportError:
+            pass
         
         # Shift for next token prediction: predict token[i+1] from token[i]
         # Note: We slice logits in-place to avoid duplicating the full tensor
@@ -91,6 +122,14 @@ def compute_ntp_loss(
         del logits  # Free reference to original logits
         shift_logits = shift_logits.contiguous()
         shift_labels = labels[..., 1:].contiguous()
+        
+        # Mark shifted tensors as dynamic
+        try:
+            from torch._dynamo import mark_dynamic
+            mark_dynamic(shift_logits, 1)  # [batch, seq_len-1, vocab_size]
+            mark_dynamic(shift_labels, 1)  # [batch, seq_len-1]
+        except ImportError:
+            pass
         
         # If loss_on_output_only, mask out non-output tokens
         if loss_on_output_only and "output_mask" in batch:
@@ -104,7 +143,7 @@ def compute_ntp_loss(
         # Use chunked cross-entropy for long sequences to avoid OOM
         # For sequences > 4096 tokens, compute loss in chunks
         seq_len = shift_logits.size(1)
-        chunk_size = 2048  # Reduced from 4096 for more aggressive chunking
+        chunk_size = 512
         
         if seq_len > chunk_size:
             # Chunked cross-entropy: avoids materializing full [batch, seq, vocab] at once

@@ -416,6 +416,7 @@ def load_fsdp_checkpoint(
     Load FSDP checkpoint.
     
     All ranks load the full state dict, then FSDP handles sharding.
+    Handles checkpoints saved with torch.compile (strips _orig_mod. prefix).
     
     Args:
         path: Checkpoint path
@@ -430,9 +431,17 @@ def load_fsdp_checkpoint(
     # All ranks load (FSDP will handle distribution)
     checkpoint = torch.load(path, map_location="cpu")
     
+    state_dict = checkpoint["model_state_dict"]
+    
+    # Handle torch.compile checkpoints: strip _orig_mod. prefix from keys
+    if any(k.startswith("_orig_mod.") for k in state_dict.keys()):
+        if is_main_process():
+            print("Detected torch.compile checkpoint, stripping _orig_mod. prefix...")
+        state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+    
     # Load model state
     with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT):
-        model.load_state_dict(checkpoint["model_state_dict"], strict=strict)
+        model.load_state_dict(state_dict, strict=strict)
     
     # Load optimizer state if provided
     if optimizer is not None and checkpoint.get("optimizer_state_dict"):

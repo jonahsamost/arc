@@ -23,6 +23,9 @@ import time
 # Silence tokenizer parallelism warning (must be before imports)
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Reduce memory fragmentation (helps with OOM issues)
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
@@ -33,6 +36,40 @@ from tqdm import tqdm
 from pathlib import Path
 from typing import Optional, Any
 from dataclasses import asdict
+
+
+def print_gpu_memory(device: torch.device, prefix: str = "", rank: int = 0) -> dict:
+    """
+    Print GPU memory usage and return memory stats.
+    
+    Returns:
+        dict with memory stats in GB
+    """
+    if device.type != "cuda":
+        return {}
+    
+    torch.cuda.synchronize(device)
+    allocated = torch.cuda.memory_allocated(device) / 1024**3  # GB
+    reserved = torch.cuda.memory_reserved(device) / 1024**3  # GB
+    max_allocated = torch.cuda.max_memory_allocated(device) / 1024**3  # GB
+    total = torch.cuda.get_device_properties(device).total_memory / 1024**3  # GB
+    
+    free = total - reserved
+    available = total - allocated
+    
+    if rank == 0 or not dist.is_initialized():
+        print(f"{prefix}GPU Memory: allocated={allocated:.2f}GB, reserved={reserved:.2f}GB, "
+              f"free={free:.2f}GB, available={available:.2f}GB, max_allocated={max_allocated:.2f}GB, "
+              f"total={total:.2f}GB", flush=True)
+    
+    return {
+        "allocated_gb": allocated,
+        "reserved_gb": reserved,
+        "free_gb": free,
+        "available_gb": available,
+        "max_allocated_gb": max_allocated,
+        "total_gb": total,
+    }
 
 # Load .env file (for WANDB_API_KEY, etc.)
 from dotenv import load_dotenv
@@ -172,20 +209,27 @@ def create_distributed_dataloader(
         data_dir=data_dir,
         tokenizer=tokenizer,
         shuffle_shards=is_train and world_size == 1,  # Don't shuffle if using DistributedSampler
-        fim_ratio=config.fim_ratio if is_train else 0.0,
         max_seq_length=config.max_seq_length,
+        fim_ratio=config.fim_ratio if is_train else 0.0,  # Only use FIM for training
     )
+    
+    # Create collate function with fixed sequence length for memory profiling
+    from functools import partial
+    # collate_fn = partial(collate_arc_2d, fixed_seq_length=config.max_seq_length)
+    collate_fn = collate_arc_2d
     
     # For distributed training, use DistributedSampler
     # Note: IterableDataset doesn't use samplers the same way
     # The dataset already handles shard distribution via worker_info
     
+    # Note: pin_memory=True can hide errors in worker processes
+    # If you see "Pin memory thread exited unexpectedly", try num_workers=0 to debug
     return DataLoader(
         dataset,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
-        collate_fn=collate_arc_2d,
-        pin_memory=True,
+        collate_fn=collate_fn,
+        pin_memory=config.num_workers > 0,  # Only pin if using workers
     )
 
 
@@ -246,8 +290,13 @@ def train_epoch(
         if batch_idx % config.grad_accum_steps == 0:
             step_start_time = time.time()
         
-        # seq_len = batch["input_ids"].shape[1]
-        # batch_size = batch["input_ids"].shape[0]
+        seq_len = batch["input_ids"].shape[1]
+        batch_size = batch["input_ids"].shape[0]
+        
+        # Print memory usage on first batch to help determine max batch size
+        if batch_idx == 0 and device.type == "cuda":
+            print_gpu_memory(device, f"[Rank {rank}] After first batch (batch_size={batch_size}, seq_len={seq_len}): ", rank)
+        
         # print(f'[Rank {rank}] Batch {batch_idx}: seq_len={seq_len}, batch_size={batch_size}', flush=True)
         
         # print(f'[Rank {rank}] Calling compute_ntp_loss...', flush=True)
@@ -260,8 +309,10 @@ def train_epoch(
         # print(f'[Rank {rank}] compute_ntp_loss returned, loss={loss.item():.4f}', flush=True)
         
         # Clean up memory before backward
-        if config.distributed and device.type == "cuda":
-            torch.cuda.synchronize()
+        if device.type == "cuda":
+            torch.cuda.empty_cache()  # Clear cache before backward
+            if config.distributed:
+                torch.cuda.synchronize()
             # print(f'[Rank {rank}] CUDA synchronized before backward', flush=True)
         
         loss = loss / config.grad_accum_steps
@@ -284,8 +335,16 @@ def train_epoch(
             traceback.print_exc()
             raise
         
+        # Print memory after backward on first step to see peak usage
+        if batch_idx == 0 and device.type == "cuda":
+            print_gpu_memory(device, f"[Rank {rank}] After first backward: ", rank)
+        
         step_loss += loss.item()
         del loss
+        
+        # Clear cache periodically to free memory
+        if device.type == "cuda" and batch_idx % 5 == 0:  # Every 5 batches to avoid overhead
+            torch.cuda.empty_cache()
         
         if (batch_idx + 1) % config.grad_accum_steps == 0:
             # print(f'[Rank {rank}] Accumulation complete, computing grad norm...', flush=True)
@@ -304,6 +363,9 @@ def train_epoch(
             
             # print(f'[Rank {rank}] Calling scheduler.step()...', flush=True)
             scheduler.step()
+            
+            if device.type == "cuda":
+                print_gpu_memory(device, f"[Rank {rank}] After optimizer step: ", rank)
             # print(f'[Rank {rank}] scheduler.step() completed', flush=True)
             
             # print(f'[Rank {rank}] Calling optimizer.zero_grad()...', flush=True)
@@ -482,7 +544,6 @@ def train(config: TrainConfig) -> None:
     print(f"[Rank {rank}] Tokenizer ready", flush=True)
     
     # === Load Model ===
-    # === Load Model ===
     # All ranks load model to CPU, FSDP will shard to GPUs
     # Using low_cpu_mem_usage in load_qwen_2d helps reduce peak memory
     print(f"[Rank {rank}] Loading model to CPU...", flush=True)
@@ -498,17 +559,17 @@ def train(config: TrainConfig) -> None:
     # === Apply torch.compile (if enabled, must be before FSDP) ===
     if config.use_torch_compile:
         print_rank0(f"Compiling model with mode='{config.compile_mode}'...")
-        print_rank0("Note: Variable-length sequences require dynamic shapes")
+        print_rank0("Note: Using mark_dynamic() on sequence dimensions for variable-length sequences")
         print_rank0("First forward pass will be slower (compilation), then faster")
         try:
-            # Use dynamic=True for variable-length sequences (padded batches)
-            # This allows torch.compile to handle different sequence lengths
+            # Don't use dynamic=True globally - we mark_dynamic() specific tensors instead
+            # This is more efficient: only sequence dimensions are dynamic, batch/vocab are static
             model = torch.compile(
                 model, 
                 mode=config.compile_mode,
-                dynamic=True,  # Required for variable-length sequences
+                dynamic=False,
             )
-            print_rank0("Model compiled successfully with dynamic shapes")
+            print_rank0("Model compiled successfully (using selective mark_dynamic for sequences)")
         except Exception as e:
             print_rank0(f"Warning: torch.compile failed: {e}")
             print_rank0("Continuing without compilation. Consider disabling use_torch_compile.")
@@ -524,7 +585,7 @@ def train(config: TrainConfig) -> None:
         fsdp_config = DistributedConfig(
             sharding_strategy=config.sharding_strategy,
             mixed_precision="bf16" if config.dtype == "bfloat16" else config.dtype,
-            cpu_offload=config.cpu_offload,
+            cpu_offload=True,  # Enable CPU offload to reduce GPU memory (overrides config)
             activation_checkpointing=config.gradient_checkpointing,
             sync_module_states=False,  # All ranks have same weights, no need to sync
         )
@@ -602,9 +663,9 @@ def train(config: TrainConfig) -> None:
             from src.model.qwen_2d import load_checkpoint
             metadata = load_checkpoint(config.checkpoint, model, optimizer, scheduler)
         
-        global_step = metadata["step"]
-        start_epoch = metadata["epoch"]
-        print_rank0(f"Resumed from checkpoint: epoch {start_epoch}, step {global_step}")
+        # global_step = metadata["step"]
+        # start_epoch = metadata["epoch"]
+        # print_rank0(f"Resumed from checkpoint: epoch {start_epoch}, step {global_step}")
     
     # === Initialize W&B ===
     effective_batch_size = config.batch_size * config.grad_accum_steps * world_size
@@ -618,8 +679,8 @@ def train(config: TrainConfig) -> None:
     print_rank0(f"  World size: {world_size}")
     print_rank0(f"  Effective batch size: {effective_batch_size}")
     print_rank0(f"  Learning rate: {config.lr}")
-    print_rank0(f"  FIM ratio: {config.fim_ratio:.0%}")
     print_rank0(f"  Loss on output only: {config.loss_on_output_only}")
+    print_rank0(f"  FIM ratio: {config.fim_ratio:.1%}")
     print_rank0(f"  Save every: {config.save_steps} steps")
     print_rank0(f"  Eval every: {config.eval_steps} steps ({config.eval_samples} samples)")
     print_rank0(f"  W&B logging: {wandb_run is not None}")
@@ -684,6 +745,24 @@ def train(config: TrainConfig) -> None:
             if best_eval_loss < float("inf"):
                 print_rank0(f"Best eval loss so far: {best_eval_loss:.4f}")
             
+            # End-of-epoch evaluation
+            if eval_dataloader is not None:
+                print_rank0(f"\nRunning end-of-epoch evaluation...")
+                eval_loss = evaluate(model, eval_dataloader, device, config, use_fsdp)
+                print_rank0(f"[Epoch {epoch + 1}] Eval loss: {eval_loss:.4f}")
+                
+                log_wandb(wandb_run, {
+                    "eval/loss": eval_loss,
+                    "eval/epoch": epoch + 1,
+                }, step=global_step)
+                
+                if eval_loss < best_eval_loss:
+                    best_eval_loss = eval_loss
+                    save_checkpoint_helper(epoch + 1, global_step, eval_loss, "best")
+                    log_wandb(wandb_run, {"eval/best_loss": best_eval_loss}, step=global_step)
+                
+                model.train()  # Switch back to training mode
+            
             # Log epoch metrics to W&B
             log_wandb(wandb_run, {
                 "epoch/train_loss": train_loss,
@@ -698,17 +777,10 @@ def train(config: TrainConfig) -> None:
                 print_rank0(f"Reached max_steps ({config.max_steps}), stopping.")
                 break
         
-        # === Final Save (skip if single epoch - last step checkpoint is sufficient) ===
-        if config.epochs > 1:
-            save_checkpoint_helper(config.epochs, global_step, train_loss, "final")
-            print_rank0(f"\n{'=' * 60}")
-            print_rank0("Training complete!")
-            print_rank0(f"Final checkpoint: {output_dir / f'phase{config.phase}_final.pt'}")
-        else:
-            print_rank0(f"\n{'=' * 60}")
-            print_rank0("Training complete!")
-            print_rank0(f"Latest checkpoint: phase{config.phase}_step_*.pt")
-        print_rank0(f"{'=' * 60}")
+        save_checkpoint_helper(config.epochs, global_step, train_loss, "final")
+        print_rank0(f"\n{'=' * 60}")
+        print_rank0("Training complete!")
+        print_rank0(f"Final checkpoint: {output_dir / f'phase{config.phase}_final.pt'}")
     
     finally:
         # === Cleanup ===
@@ -717,27 +789,74 @@ def train(config: TrainConfig) -> None:
             cleanup_distributed()
 
 
-def main():
+def phase1_finetune():
     """
     Example main function - customize config as needed.
     
     For multi-GPU, run with:
-        NCCL_P2P_DISABLE=1 NCCL_IB_DISABLE=1 python -m torch.distributed.run --nproc_per_node=8 -m src.train.finetune_distributed
+        python -m torch.distributed.run --nproc_per_node=4 -m src.train.finetune_distributed
+    
+    Single h200
+
     """
     # === Configure your training here ===
     config = Phase1Config(
         data_dir="/root/arc_data/train_data",
         eval_dir="/root/arc_data/eval_data",
         distributed=False,
-        batch_size=1,  # batch=2 OOMs on 11K sequences during backward
-        grad_accum_steps=4,  # Effective batch = 1 × 4 × 8 = 32
-        lr=2e-5,
+        batch_size=8,
+        grad_accum_steps=4,
+        lr=2.5e-5,
         max_steps=20_000,
-        max_seq_length=1024 * 10,  # Chunked CE handles sequences up to this
+        warmup_steps=1000,
+        max_seq_length=1024 * 8,  # Chunked CE handles sequences up to this
+        use_torch_compile=True,
+        compile_mode='default',
+        save_steps=1000,
+        eval_steps=1000,
+        weight_decay=.1
     )
     
     train(config)
 
 
+def phase2_finetune():
+    config = Phase2Config(
+        data_dir="/root/arc_data/train_data",
+        eval_dir="/root/arc_data/eval_data",
+        phase=2,
+        checkpoint="./checkpoints/phase1/phase1_checkpoint.pt",
+        lr=1.0e-5,
+        epochs=3,
+        batch_size=8,
+        grad_accum_steps=2,
+        max_steps=700,
+        warmup_steps=70,
+        use_torch_compile=True,
+        compile_mode='default'
+    )
+    train(config)
+
+
+def phase3_finetune():
+    config = Phase3Config(
+        data_dir="/root/arc_data/train_data",
+        eval_dir="/root/arc_data/eval_data",
+        phase=3,
+        checkpoint="./checkpoints/phase2/phase2_checkpoint.pt",
+        lr=4.0e-6,
+        epochs=10,
+        max_steps=500,
+        warmup_steps=50,
+        weight_decay=0.15,
+        batch_size=8,
+        grad_accum_steps=4,
+        use_torch_compile=True,
+        compile_mode='default'
+    )
+    train(config)
+
+
+
 if __name__ == '__main__':
-    main()
+    phase1_finetune()

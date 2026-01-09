@@ -24,6 +24,7 @@ class TrainConfig:
     data_dir: str = ""  # Required: directory containing training data shards
     eval_dir: Optional[str] = None  # Optional: evaluation data directory
     max_seq_length: int = 1024 * 10  # Skip samples longer than this (OOM protection)
+    fim_ratio: float = 0.3  # Fraction of samples to use FIM objective (0.0-1.0)
     
     # === Training Hyperparameters ===
     # Batch size: samples per forward pass. Larger = more efficient but more VRAM.
@@ -36,12 +37,12 @@ class TrainConfig:
     max_steps: Optional[int] = None  # Max steps (overrides epochs if set)
     lr: float = 2e-5  # Peak learning rate
     warmup_steps: int = 1000  # Warmup steps
-    weight_decay: float = 0.01  # Weight decay
+    weight_decay: float = 0.1  # Weight decay
     max_grad_norm: float = 1.0  # Max gradient norm for clipping
     
     # === Logging and Saving ===
     output_dir: str = "./checkpoints"  # Output directory for checkpoints
-    save_steps: int = 10000  # Save checkpoint every N steps
+    save_steps: int = 5000  # Save checkpoint every N steps
     log_steps: int = 10  # Log metrics every N steps
     eval_steps: int = 1000  # Evaluate every N steps (quick sampled eval)
     eval_samples: Optional[int] = 100  # Samples per eval (None = full eval set)
@@ -54,7 +55,8 @@ class TrainConfig:
     wandb_entity: Optional[str] = None  # W&B team/entity (None = personal)
     
     # === Hardware ===
-    num_workers: int = 4  # DataLoader workers
+    # Note: If you see "Pin memory thread exited unexpectedly", set num_workers=0 to debug
+    num_workers: int = 0  # DataLoader workers (0 = main process, helps debug errors)
     dtype: str = "bfloat16"  # Training dtype: float32, float16, bfloat16
     use_amp: bool = True  # Use automatic mixed precision
     
@@ -72,7 +74,6 @@ class TrainConfig:
     cpu_offload: bool = False  # Offload params to CPU (slower but saves GPU memory)
     
     # === Loss Configuration ===
-    fim_ratio: float = 0.5  # Fraction of samples to use FIM format (0=all NTP, 1=all FIM)
     loss_on_output_only: bool = False  # If True, only compute loss on output grid pixels (not metadata)
     
     @property
@@ -109,7 +110,6 @@ class Phase1Config(TrainConfig):
     phase: int = 1
     epochs: int = 3
     lr: float = 2e-5
-    fim_ratio=.5
 
 
 @dataclass
