@@ -1,12 +1,14 @@
 """
 Phase 2 data generation for ARC-AGI finetuning.
 
-Creates a smaller, curated dataset from:
+Creates a combined dataset from:
 - Mini-ARC puzzles
 - Concept-ARC puzzles  
 - RE-ARC puzzles (100 base puzzles)
+- ARC-AGI-1 training puzzles
+- ARC-AGI-2 training puzzles
 
-Each puzzle gets 10 augmentations.
+Each puzzle gets augmentations (configurable per source).
 """
 import random
 import json
@@ -17,7 +19,7 @@ from tqdm import tqdm
 
 from src.data.build_arc_dataset import (
     get_data_dir, get_rearc_path, generate_rearc_data,
-    load_mini_arc, load_concept_arc, sample_puzzle_size
+    load_mini_arc, load_concept_arc, load_arc_puzzles, sample_puzzle_size
 )
 from src.data.common import ARCAugmenter
 
@@ -161,9 +163,46 @@ def iter_concept_arc_puzzles(
             aug_idx += 1
 
 
+def iter_arc_puzzles(
+    variant: int,
+    num_augs: int = 15,
+    max_puzzles: int = None,
+) -> Iterator[Tuple[Any, str]]:
+    """
+    Generator that yields ARC-AGI puzzles with augmentations.
+    
+    Args:
+        variant: 1 for ARC-AGI-1, 2 for ARC-AGI-2
+        num_augs: Number of augmentations per puzzle (0 = no augmentation, return original)
+        max_puzzles: Maximum number of base puzzles to use (None = all)
+    
+    Yields:
+        (puzzle_dict, puzzle_id) tuples
+    """
+    arc_aug = ARCAugmenter()
+    puzzles = load_arc_puzzles(variant=variant, training=True)
+    
+    if max_puzzles:
+        puzzles = puzzles[:max_puzzles]
+    
+    for puzzle_data, filepath in puzzles:
+        puzzle_id = f"arc{variant}_{Path(filepath).stem}"
+        
+        if num_augs == 0:
+            # No augmentation - return original puzzle
+            yield ({'puzzle': puzzle_data}, puzzle_id)
+        else:
+            # Apply augmentations
+            aug_idx = 0
+            for aug_puzzle in arc_aug.augment_puzzle(puzzle_data, num_augmentations=num_augs):
+                yield (aug_puzzle, f"{puzzle_id}_aug{aug_idx}")
+                aug_idx += 1
+
+
 def generate_phase2_data(
     num_rearc_base_puzzles: int = 100,
     num_augmentations: int = 10,
+    arc_augmentations: int = 15,
     shard_size: int = 1000,
     max_seq_length: int = 1024 * 8,
     output_name: str = 'train_data_phase2',
@@ -175,12 +214,13 @@ def generate_phase2_data(
     - Mini-ARC puzzles (all available)
     - Concept-ARC puzzles (all available)
     - RE-ARC puzzles (limited to num_rearc_base_puzzles)
-    
-    Each puzzle gets num_augmentations augmentations.
+    - ARC-AGI-1 training puzzles
+    - ARC-AGI-2 training puzzles
     
     Args:
         num_rearc_base_puzzles: Number of RE-ARC base puzzles to use
-        num_augmentations: Augmentations per puzzle
+        num_augmentations: Augmentations per puzzle (Mini-ARC, Concept-ARC, RE-ARC)
+        arc_augmentations: Augmentations per puzzle (ARC-AGI-1, ARC-AGI-2)
         shard_size: Samples per shard file
         max_seq_length: Filter out puzzles > this estimated token count
         output_name: Output directory name
@@ -189,14 +229,15 @@ def generate_phase2_data(
     
     print(f"=== Generating Phase 2 Training Data ===")
     print(f"  RE-ARC base puzzles: {num_rearc_base_puzzles}")
-    print(f"  Augmentations per puzzle: {num_augmentations}")
+    print(f"  Augmentations (Mini/Concept/RE-ARC): {num_augmentations}")
+    print(f"  Augmentations (ARC-AGI-1/2): {arc_augmentations}")
     print(f"  Max sequence length: {max_seq_length:,}")
     print(f"  Shard size: {shard_size}")
     print()
     
     # Generate RE-ARC data (need fresh generation for the puzzles)
     print("Step 1: Generating RE-ARC examples...")
-    generate_rearc_data(rearc_cnt=500, delete=True)  # Generate enough examples
+    generate_rearc_data(rearc_cnt=200, delete=True)  # Generate enough examples
     
     # Setup output directory
     output_path = data_dir / output_name
@@ -213,7 +254,7 @@ def generate_phase2_data(
     print("  Loading Mini-ARC...")
     mini_arc_count = 0
     for puzzle, puzzle_id in iter_mini_arc_puzzles(num_augs=num_augmentations):
-        est_tokens = estimate_puzzle_tokens(puzzle)
+        est_tokens = estimate_puzzle_tokens(puzzle['puzzle'])
         if est_tokens <= max_seq_length:
             all_puzzles.append((puzzle['puzzle'], puzzle_id))
             mini_arc_count += 1
@@ -225,7 +266,7 @@ def generate_phase2_data(
     print("  Loading Concept-ARC...")
     concept_arc_count = 0
     for puzzle, puzzle_id in iter_concept_arc_puzzles(num_augs=num_augmentations):
-        est_tokens = estimate_puzzle_tokens(puzzle)
+        est_tokens = estimate_puzzle_tokens(puzzle['puzzle'])
         if est_tokens <= max_seq_length:
             all_puzzles.append((puzzle['puzzle'], puzzle_id))
             concept_arc_count += 1
@@ -240,13 +281,37 @@ def generate_phase2_data(
         num_base_puzzles=num_rearc_base_puzzles,
         num_augs=num_augmentations
     ):
-        est_tokens = estimate_puzzle_tokens(puzzle)
+        est_tokens = estimate_puzzle_tokens(puzzle['puzzle'])
         if est_tokens <= max_seq_length:
             all_puzzles.append((puzzle['puzzle'], puzzle_id))
             rearc_count += 1
         else:
             skipped_count += 1
     print(f"    Added {rearc_count} RE-ARC samples")
+    
+    # ARC-AGI-1
+    print("  Loading ARC-AGI-1...")
+    arc1_count = 0
+    for puzzle, puzzle_id in iter_arc_puzzles(variant=1, num_augs=arc_augmentations):
+        est_tokens = estimate_puzzle_tokens(puzzle['puzzle'])
+        if est_tokens <= max_seq_length:
+            all_puzzles.append((puzzle['puzzle'], puzzle_id))
+            arc1_count += 1
+        else:
+            skipped_count += 1
+    print(f"    Added {arc1_count} ARC-AGI-1 samples")
+    
+    # ARC-AGI-2
+    print("  Loading ARC-AGI-2...")
+    arc2_count = 0
+    for puzzle, puzzle_id in iter_arc_puzzles(variant=2, num_augs=arc_augmentations):
+        est_tokens = estimate_puzzle_tokens(puzzle['puzzle'])
+        if est_tokens <= max_seq_length:
+            all_puzzles.append((puzzle['puzzle'], puzzle_id))
+            arc2_count += 1
+        else:
+            skipped_count += 1
+    print(f"    Added {arc2_count} ARC-AGI-2 samples")
     
     print(f"\n  Total samples: {len(all_puzzles):,}")
     print(f"  Skipped (too long): {skipped_count:,}")
@@ -283,6 +348,8 @@ def generate_phase2_data(
     print(f"  - Mini-ARC: {mini_arc_count:,}")
     print(f"  - Concept-ARC: {concept_arc_count:,}")
     print(f"  - RE-ARC: {rearc_count:,}")
+    print(f"  - ARC-AGI-1: {arc1_count:,}")
+    print(f"  - ARC-AGI-2: {arc2_count:,}")
     
     return output_path
 
@@ -292,9 +359,8 @@ def main():
     return generate_phase2_data(
         num_rearc_base_puzzles=100,
         num_augmentations=10,
+        arc_augmentations=15,
         shard_size=1000,
         max_seq_length=1024 * 8,
     )
-
-
 

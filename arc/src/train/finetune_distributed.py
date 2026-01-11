@@ -662,7 +662,7 @@ def train(config: TrainConfig) -> None:
         else:
             from src.model.qwen_2d import load_checkpoint
             metadata = load_checkpoint(config.checkpoint, model, optimizer, scheduler)
-        
+        print('Loaded checkpoint!!!') 
         # global_step = metadata["step"]
         # start_epoch = metadata["epoch"]
         # print_rank0(f"Resumed from checkpoint: epoch {start_epoch}, step {global_step}")
@@ -827,36 +827,19 @@ def phase2_finetune():
         phase=2,
         checkpoint="./checkpoints/phase1/phase1_checkpoint.pt",
         lr=1.0e-5,
-        epochs=3,
-        batch_size=8,
-        grad_accum_steps=2,
-        max_steps=700,
-        warmup_steps=70,
-        use_torch_compile=True,
-        compile_mode='default'
-    )
-    train(config)
-
-
-def phase3_finetune():
-    config = Phase3Config(
-        data_dir="/root/arc_data/train_data",
-        eval_dir="/root/arc_data/eval_data",
-        phase=3,
-        checkpoint="./checkpoints/phase2/phase2_checkpoint.pt",
-        lr=4.0e-6,
-        epochs=10,
-        max_steps=500,
-        warmup_steps=50,
-        weight_decay=0.15,
+        epochs=2,
         batch_size=8,
         grad_accum_steps=4,
+        max_steps=1500,
+        warmup_steps=150,
         use_torch_compile=True,
-        compile_mode='default'
+        compile_mode='default',
+        loss_on_output_only=True,
+        save_steps=250,
+        eval_steps=250,
+        max_seq_length=1024 * 8,  # Chunked CE handles sequences up to this
     )
     train(config)
 
-
-
 if __name__ == '__main__':
-    phase1_finetune()
+    phase2_finetune()
