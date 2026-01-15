@@ -5,6 +5,10 @@ Provides end-to-end evaluation pipeline:
 1. Load model and LoRA weights
 2. For each puzzle: run TTT adaptation, generate prediction, compare to ground truth
 3. Report accuracy and timing metrics
+
+Usage:
+    1. Edit EvalConfig in this file with your paths
+    2. Run: python -m src.lora.evaluate
 """
 
 import torch
@@ -17,6 +21,49 @@ from tqdm import tqdm
 import numpy as np
 
 from src.lora.config import LoRAConfig, TTTConfig, InferenceConfig, LoRATTTConfig
+
+
+@dataclass
+class EvalConfig:
+    """Configuration for evaluation. Edit values here before running."""
+    
+    # === Paths ===
+    dataset_path: str = ""  # Path to ARC dataset (directory or file)
+    base_checkpoint: str = ""  # Path to base model checkpoint (phase 2/3)
+    lora_checkpoint: str = ""  # Path to trained LoRA weights (optional, can be empty)
+    
+    # === Model ===
+    model_name: str = "Qwen/Qwen3-4B-Thinking-2507"
+    dtype: str = "bfloat16"
+    
+    # === LoRA ===
+    lora_r: int = 4
+    lora_alpha: float = 1.0
+    lora_target_modules: Tuple[str, ...] = ("q_proj", "v_proj")
+    
+    # === TTT ===
+    ttt_lr: float = 1e-3  # Inner loop learning rate
+    ttt_epochs: int = 1  # Number of epochs over augmented samples
+    num_augmentations: int = 50  # Augmented examples per puzzle
+    ttt_batch_size: int = 8  # Batch size for TTT
+    
+    # === Inference ===
+    num_candidates: int = 3  # Best-of-N sampling
+    temperature: float = 0.7  # Sampling temperature (0 = greedy)
+    top_p: float = 0.9  # Top-p nucleus sampling
+    use_thinking: bool = True  # Add <think> prompt
+    max_new_tokens: int = 512  # Max tokens to generate
+    
+    # === Evaluation ===
+    max_puzzles: Optional[int] = None  # Limit number of puzzles (None = all)
+    
+    @property
+    def torch_dtype(self) -> torch.dtype:
+        return {
+            "float32": torch.float32,
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+        }[self.dtype]
 from src.lora.lora_model import (
     apply_lora_to_model,
     load_lora,
@@ -67,12 +114,86 @@ class EvalMetrics:
         return self.total_time_s / max(self.num_puzzles, 1)
 
 
+def load_puzzle_file(file_path: Path, base_puzzle_id: Optional[str] = None) -> Dict[str, dict]:
+    """
+    Load puzzles from a single file (JSON or JSONL).
+    
+    Handles various formats:
+    - Single puzzle dict with 'train' and 'test' keys
+    - Dict of puzzles: {puzzle_id: puzzle_data, ...}
+    - List of puzzles
+    - JSONL with one puzzle per line (various formats)
+    
+    Args:
+        file_path: Path to the file
+        base_puzzle_id: Default puzzle ID to use (defaults to filename stem)
+    
+    Returns:
+        Dict mapping puzzle_id -> puzzle_data
+    """
+    puzzles = {}
+    base_id = base_puzzle_id or file_path.stem
+    
+    if file_path.suffix == ".jsonl":
+        # JSONL file - one puzzle per line
+        with open(file_path, 'r') as f:
+            for line_idx, line in enumerate(f):
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                
+                if isinstance(data, list) and len(data) >= 2:
+                    # Format: [puzzle_data, puzzle_id] or [{'puzzle': ...}, puzzle_id]
+                    puzzle_data, puzzle_id = data[0], data[1]
+                    if 'puzzle' in puzzle_data:
+                        puzzles[puzzle_id] = puzzle_data['puzzle']
+                    else:
+                        puzzles[puzzle_id] = puzzle_data
+                elif isinstance(data, dict):
+                    if 'train' in data and 'test' in data:
+                        # Single puzzle dict
+                        puzzle_id = data.get('id', f"{base_id}_{line_idx}")
+                        puzzles[puzzle_id] = data
+                    elif 'puzzle' in data:
+                        # Wrapped puzzle
+                        puzzle_id = data.get('id', f"{base_id}_{line_idx}")
+                        puzzles[puzzle_id] = data['puzzle']
+                    else:
+                        # Assume it's a puzzle
+                        puzzle_id = data.get('id', f"{base_id}_{line_idx}")
+                        puzzles[puzzle_id] = data
+    else:
+        # JSON file
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        
+        if isinstance(data, dict):
+            if 'train' in data and 'test' in data:
+                # Single puzzle
+                puzzles[base_id] = data
+            elif 'puzzle' in data:
+                # Wrapped puzzle
+                puzzles[base_id] = data['puzzle']
+            else:
+                # Dict of puzzles: {puzzle_id: puzzle_data}
+                puzzles = data
+        elif isinstance(data, list):
+            # List of puzzles
+            for i, puzzle in enumerate(data):
+                if isinstance(puzzle, dict) and 'puzzle' in puzzle:
+                    puzzles[f"{base_id}_{i}"] = puzzle['puzzle']
+                else:
+                    puzzles[f"{base_id}_{i}"] = puzzle
+    
+    return puzzles
+
+
 def load_arc_dataset(dataset_path: str) -> Dict[str, dict]:
     """
     Load ARC dataset from directory or file.
     
     Supports:
-    - Directory of JSON files (one puzzle per file)
+    - Directory of JSON/JSONL files
     - Single JSON file with dict of puzzles
     - Single JSONL file with puzzles
     
@@ -82,39 +203,13 @@ def load_arc_dataset(dataset_path: str) -> Dict[str, dict]:
     puzzles = {}
     
     if path.is_dir():
-        # Directory of JSON files
-        for json_file in sorted(path.glob("*.json")):
-            puzzle_id = json_file.stem
-            with open(json_file, 'r') as f:
-                puzzles[puzzle_id] = json.load(f)
-    elif path.suffix == ".jsonl":
-        # JSONL file
-        with open(path, 'r') as f:
-            for line in f:
-                if line.strip():
-                    data = json.loads(line)
-                    if isinstance(data, list) and len(data) >= 2:
-                        puzzle_data, puzzle_id = data[0], data[1]
-                        if 'puzzle' in puzzle_data:
-                            puzzles[puzzle_id] = puzzle_data['puzzle']
-                        else:
-                            puzzles[puzzle_id] = puzzle_data
-                    elif isinstance(data, dict):
-                        puzzle_id = data.get('id', f"puzzle_{len(puzzles)}")
-                        puzzles[puzzle_id] = data
-    elif path.suffix == ".json":
-        # Single JSON file with dict of puzzles
-        with open(path, 'r') as f:
-            data = json.load(f)
-            if isinstance(data, dict):
-                # Could be {puzzle_id: puzzle_data} or a single puzzle
-                if 'train' in data and 'test' in data:
-                    puzzles[path.stem] = data
-                else:
-                    puzzles = data
-            elif isinstance(data, list):
-                for i, puzzle in enumerate(data):
-                    puzzles[f"puzzle_{i}"] = puzzle
+        # Directory - load all JSON/JSONL files
+        for json_file in sorted(path.glob("*.json*")):
+            file_puzzles = load_puzzle_file(json_file)
+            puzzles.update(file_puzzles)
+    else:
+        # Single file
+        puzzles = load_puzzle_file(path)
     
     return puzzles
 
@@ -284,93 +379,96 @@ def main():
     """
     Main evaluation entry point.
     
-    Example usage:
-        python -m src.lora.evaluate \
-            --dataset /path/to/arc_evaluation \
-            --checkpoint /path/to/phase3_final.pt \
-            --lora_checkpoint /path/to/lora_trained.pt
+    Edit EvalConfig at the top of this file before running.
     """
-    import argparse
+    # === EDIT CONFIG HERE ===
+    config = EvalConfig(
+        dataset_path="/root/arc_data/eval_data/",
+        base_checkpoint="/root/checkpoints/phase2/phase2_checkpoint.pt",
+        lora_checkpoint="/root/checkpoints/lora/lora_final.pt",
+        max_puzzles=None,  # Set to int to limit evaluation
+    )
     
-    parser = argparse.ArgumentParser(description="Evaluate LoRA + TTT on ARC dataset")
-    parser.add_argument("--dataset", type=str, required=True,
-                       help="Path to ARC dataset (directory or file)")
-    parser.add_argument("--checkpoint", type=str, required=True,
-                       help="Path to base model checkpoint")
-    parser.add_argument("--lora_checkpoint", type=str, default="",
-                       help="Path to trained LoRA weights (optional)")
-    parser.add_argument("--max_puzzles", type=int, default=None,
-                       help="Maximum puzzles to evaluate")
-    
-    # TTT config
-    parser.add_argument("--ttt_lr", type=float, default=1e-3)
-    parser.add_argument("--ttt_steps", type=int, default=5)
-    parser.add_argument("--num_augmentations", type=int, default=50)
-    
-    # Inference config
-    parser.add_argument("--num_candidates", type=int, default=3)
-    parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--use_thinking", action="store_true", default=True)
-    parser.add_argument("--no_thinking", action="store_true")
-    
-    # LoRA config
-    parser.add_argument("--lora_r", type=int, default=4)
-    parser.add_argument("--lora_alpha", type=float, default=1.0)
-    
-    args = parser.parse_args()
+    # Validate required paths
+    if not config.dataset_path or not config.base_checkpoint:
+        raise ValueError(
+            "Please edit EvalConfig in src/lora/evaluate.py with your paths."
+        )
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
     # Initialize tokenizer
-    tokenizer = Arc2DTokenizer()
+    print("Initializing tokenizer...")
+    tokenizer = Arc2DTokenizer(model_name=config.model_name)
     
     # Load model
-    print(f"Loading model from {args.checkpoint}...")
+    print(f"Loading model from {config.base_checkpoint}...")
     model, tokenizer = load_qwen_2d(
+        model_name=config.model_name,
         tokenizer_2d=tokenizer,
-        checkpoint_path=args.checkpoint,
+        checkpoint_path=config.base_checkpoint,
+        dtype=config.torch_dtype,
         device="cpu",  # Load to CPU first
     )
     
     # Apply LoRA
-    lora_config = LoRAConfig(r=args.lora_r, alpha=args.lora_alpha)
+    lora_config = LoRAConfig(
+        r=config.lora_r,
+        alpha=config.lora_alpha,
+        target_modules=config.lora_target_modules,
+    )
     apply_lora_to_model(model, lora_config)
     freeze_base_model(model)
     
     # Load LoRA weights if provided
-    if args.lora_checkpoint:
-        load_lora(model, args.lora_checkpoint)
+    if config.lora_checkpoint:
+        print(f"Loading LoRA weights from {config.lora_checkpoint}...")
+        load_lora(model, config.lora_checkpoint)
     
     # Move to device
     model = model.to(device)
     
-    # Create configs
+    # Create TTT and inference configs
     ttt_config = TTTConfig(
-        inner_lr=args.ttt_lr,
-        inner_steps=args.ttt_steps,
-        num_augmentations=args.num_augmentations,
+        inner_lr=config.ttt_lr,
+        inner_epochs=config.ttt_epochs,
+        num_augmentations=config.num_augmentations,
+        inner_batch_size=config.ttt_batch_size,
     )
     
     inference_config = InferenceConfig(
-        num_candidates=args.num_candidates,
-        temperature=args.temperature,
-        use_thinking=args.use_thinking and not args.no_thinking,
+        num_candidates=config.num_candidates,
+        temperature=config.temperature,
+        top_p=config.top_p,
+        use_thinking=config.use_thinking,
+        max_new_tokens=config.max_new_tokens,
     )
+    
+    # Print config summary
+    print("\n" + "=" * 60)
+    print("EVALUATION CONFIG")
+    print("=" * 60)
+    print(f"Dataset: {config.dataset_path}")
+    print(f"Base checkpoint: {config.base_checkpoint}")
+    print(f"LoRA checkpoint: {config.lora_checkpoint or '(none)'}")
+    print(f"TTT: {config.ttt_epochs} epochs, lr={config.ttt_lr}, {config.num_augmentations} augmentations, batch_size={config.ttt_batch_size}")
+    print(f"Inference: {config.num_candidates} candidates, temp={config.temperature}, thinking={config.use_thinking}")
+    print("=" * 60 + "\n")
     
     # Run evaluation
     metrics = evaluate_arc_dataset(
         model=model,
         tokenizer=tokenizer,
-        dataset_path=args.dataset,
+        dataset_path=config.dataset_path,
         ttt_config=ttt_config,
         inference_config=inference_config,
         device=device,
-        max_puzzles=args.max_puzzles,
+        max_puzzles=config.max_puzzles,
     )
     
     print_eval_summary(metrics)
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

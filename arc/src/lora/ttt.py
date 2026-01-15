@@ -6,11 +6,9 @@ Uses ARCAugmenter from src.data.common for data augmentation.
 """
 
 import torch
-import torch.nn as nn
 from torch.optim import AdamW
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Optional
 import random
-import copy
 
 from src.lora.config import TTTConfig
 from src.lora.lora_model import (
@@ -20,6 +18,7 @@ from src.lora.lora_model import (
 )
 from src.data.common import ARCAugmenter
 from src.data.tokenizer_2d import Arc2DTokenizer
+from src.data.dataloader import collate_arc_2d
 from src.train.loss import compute_ntp_loss
 
 
@@ -36,9 +35,12 @@ def ttt_adapt(
     
     This implements the inner loop of TTT:
     1. Augment support examples
-    2. Clone LoRA weights
+    2. Load initial LoRA weights
     3. Run gradient descent on augmented support set
     4. Return adapted LoRA state dict
+    
+    NOTE: This function DOES modify the model in place during training.
+    The model will have the adapted weights when this function returns.
     
     Args:
         model: The Qwen model with LoRA applied
@@ -49,7 +51,7 @@ def ttt_adapt(
         device: Device to run on
     
     Returns:
-        Adapted LoRA state dict (does not modify model in place)
+        Adapted LoRA state dict
     """
     model.train()
     
@@ -84,7 +86,9 @@ def ttt_adapt(
     # Tokenize all augmented support examples
     # Use the same format as fine-tuning: all but one pair as context, last pair to predict
     tokenized_samples = []
-    for aug_data in augmented_list:
+    tokenization_failures = 0
+    
+    for aug_idx, aug_data in enumerate(augmented_list):
         aug_puzzle = aug_data['puzzle']
         train_pairs = aug_puzzle['train']
         
@@ -99,8 +103,10 @@ def ttt_adapt(
                     }
                     sample = tokenizer.build_sample(sample_puzzle, inference_mode=False)
                     if sample['input_ids'].shape[0] <= config.max_seq_length:
-                        tokenized_samples.append(sample)
-                except Exception:
+                        tokenized_samples.append((sample, f"aug_{aug_idx}_pair_0"))
+                except Exception as e:
+                    tokenization_failures += 1
+                    print(f"[TTT] Tokenization failed for aug_{aug_idx}: {e}")
                     continue
         else:
             # Create multiple samples by rotating which pair is the prediction target
@@ -120,40 +126,65 @@ def ttt_adapt(
                     
                     # Skip if too long
                     if sample['input_ids'].shape[0] <= config.max_seq_length:
-                        tokenized_samples.append(sample)
-                except Exception:
-                    # Skip malformed samples
+                        tokenized_samples.append((sample, f"aug_{aug_idx}_pair_{target_idx}"))
+                except Exception as e:
+                    tokenization_failures += 1
+                    print(f"[TTT] Tokenization failed for aug_{aug_idx}_pair_{target_idx}: {e}")
                     continue
     
+    if tokenization_failures > 0:
+        print(f"[TTT] {tokenization_failures} tokenization failures, {len(tokenized_samples)} samples created")
+    
     if not tokenized_samples:
-        print("Warning: No valid tokenized samples for TTT. Returning original LoRA weights.")
+        print("[TTT] ERROR: No valid tokenized samples for TTT. Returning original LoRA weights.")
         return get_lora_state_dict(model)
     
-    # TTT inner loop
-    for step in range(config.inner_steps):
-        # Sample a mini-batch
-        batch_samples = random.sample(
-            tokenized_samples,
-            min(config.inner_batch_size, len(tokenized_samples))
-        )
+    print(f"[TTT] Starting adaptation: {len(tokenized_samples)} samples, {config.inner_epochs} epochs, batch_size={config.inner_batch_size}")
+    
+    # TTT inner loop - iterate through all samples for each epoch
+    total_steps = 0
+    for epoch in range(config.inner_epochs):
+        # Shuffle samples at the start of each epoch
+        random.shuffle(tokenized_samples)
         
-        # Collate batch
-        batch = collate_ttt_batch(batch_samples, device)
+        epoch_loss = 0.0
+        epoch_batches = 0
         
-        # Forward pass and loss
-        optimizer.zero_grad()
-        loss = compute_ntp_loss(
-            model,
-            batch,
-            device,
-            use_amp=True,
-            amp_dtype=torch.bfloat16,
-            loss_on_output_only=config.loss_on_output_only,
-        )
+        # Iterate through all samples in batches
+        for batch_start in range(0, len(tokenized_samples), config.inner_batch_size):
+            batch_end = min(batch_start + config.inner_batch_size, len(tokenized_samples))
+            batch_samples = tokenized_samples[batch_start:batch_end]
+            
+            # Collate batch using shared collate function
+            batch = collate_ttt_batch(batch_samples, device)
+            
+            # Forward pass and loss
+            optimizer.zero_grad()
+            loss = compute_ntp_loss(
+                model,
+                batch,
+                device,
+                use_amp=True,
+                amp_dtype=torch.bfloat16,
+                loss_on_output_only=config.loss_on_output_only,
+            )
+            
+            # Backward and update
+            loss.backward()
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(lora_params, config.max_grad_norm)
+            
+            optimizer.step()
+            
+            epoch_loss += loss.item()
+            epoch_batches += 1
+            total_steps += 1
         
-        # Backward and update
-        loss.backward()
-        optimizer.step()
+        avg_epoch_loss = epoch_loss / max(epoch_batches, 1)
+        print(f"[TTT] Epoch {epoch + 1}/{config.inner_epochs}: avg_loss={avg_epoch_loss:.4f}, steps={epoch_batches}")
+    
+    print(f"[TTT] Adaptation complete: {total_steps} total steps")
     
     # Extract adapted LoRA weights
     adapted_state_dict = get_lora_state_dict(model)
@@ -166,47 +197,34 @@ def ttt_adapt(
 
 
 def collate_ttt_batch(
-    samples: List[Dict[str, torch.Tensor]],
+    samples: List[tuple],
     device: torch.device,
 ) -> Dict[str, torch.Tensor]:
     """
     Collate a batch of tokenized samples for TTT.
     
-    Handles variable-length sequences by padding to max length in batch.
+    Uses the shared collate_arc_2d function from dataloader.py to avoid
+    code duplication. Moves tensors to device after collation.
+    
+    Args:
+        samples: List of (sample_dict, filename) tuples (same format as dataloader)
+        device: Target device for tensors
+    
+    Returns:
+        Batched tensors on device
     """
-    from src.data.tokenizer_2d import IGNORE_INDEX
+    # Use shared collate function
+    batch = collate_arc_2d(samples)
     
-    max_len = max(s["input_ids"].size(0) for s in samples)
-    batch_size = len(samples)
-    
-    # Prepare output tensors
-    input_ids = torch.full((batch_size, max_len), 0, dtype=torch.long)
-    labels = torch.full((batch_size, max_len), IGNORE_INDEX, dtype=torch.long)
-    attention_mask = torch.zeros((batch_size, max_len), dtype=torch.long)
-    pos_1d = torch.zeros((batch_size, max_len), dtype=torch.long)
-    pos_2d = torch.zeros((batch_size, max_len, 2), dtype=torch.long)
-    grid_mode = torch.zeros((batch_size, max_len), dtype=torch.long)
-    output_mask = torch.zeros((batch_size, max_len), dtype=torch.long)
-    
-    for i, sample in enumerate(samples):
-        seq_len = sample["input_ids"].size(0)
-        
-        input_ids[i, :seq_len] = sample["input_ids"]
-        labels[i, :seq_len] = sample["labels"]
-        attention_mask[i, :seq_len] = sample["attention_mask"]
-        pos_1d[i, :seq_len] = sample["pos_1d"]
-        pos_2d[i, :seq_len] = sample["pos_2d"]
-        grid_mode[i, :seq_len] = sample["grid_mode"]
-        output_mask[i, :seq_len] = sample["output_mask"]
-    
+    # Move to device (collate_arc_2d returns CPU tensors)
     return {
-        "input_ids": input_ids.to(device),
-        "labels": labels.to(device),
-        "attention_mask": attention_mask.to(device),
-        "pos_1d": pos_1d.to(device),
-        "pos_2d": pos_2d.to(device),
-        "grid_mode": grid_mode.to(device),
-        "output_mask": output_mask.to(device),
+        "input_ids": batch["input_ids"].to(device),
+        "labels": batch["labels"].to(device),
+        "attention_mask": batch["attention_mask"].to(device),
+        "pos_1d": batch["pos_1d"].to(device),
+        "pos_2d": batch["pos_2d"].to(device),
+        "grid_mode": batch["grid_mode"].to(device),
+        "output_mask": batch["output_mask"].to(device),
     }
 
 

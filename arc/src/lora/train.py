@@ -30,7 +30,6 @@ from src.lora.lora_model import (
     apply_lora_to_model,
     get_lora_params,
     save_lora,
-    load_lora,
     freeze_base_model,
     count_lora_params,
 )
@@ -133,13 +132,22 @@ def train(config: LoRATrainConfig) -> None:
     # Freeze base model
     freeze_base_model(model)
     
-    # Load LoRA checkpoint if resuming
-    if config.lora_checkpoint:
-        print(f"Loading LoRA checkpoint from {config.lora_checkpoint}...")
-        load_lora(model, config.lora_checkpoint)
-    
     # Move to device
     model = model.to(device)
+    
+    # Apply torch.compile if enabled
+    if config.use_torch_compile:
+        print(f"Compiling model with mode={config.compile_mode}...")
+        model = torch.compile(model, mode=config.compile_mode)
+    
+    # Get LoRA parameters (must work after compile)
+    lora_param_list = get_lora_params(model)
+    if not lora_param_list:
+        raise RuntimeError(
+            "No LoRA parameters found after torch.compile. "
+            "This may indicate an issue with model wrapping. "
+            "Try setting use_torch_compile=False to debug."
+        )
     
     # Count parameters
     total_params = sum(p.numel() for p in model.parameters())
@@ -156,7 +164,6 @@ def train(config: LoRATrainConfig) -> None:
         eval_dataloader = create_dataloader(config.eval_dir, tokenizer, config, is_train=False)
     
     # Optimizer (only LoRA params)
-    lora_param_list = get_lora_params(model)
     optimizer = AdamW(
         lora_param_list,
         lr=config.lr,
@@ -232,9 +239,12 @@ def train(config: LoRATrainConfig) -> None:
                 loss_on_output_only=config.loss_on_output_only,
             )
             
-            loss = loss / config.grad_accum_steps
-            loss.backward()
+            # Accumulate the raw loss value for logging (before scaling)
             step_loss += loss.item()
+            
+            # Scale loss for gradient accumulation
+            scaled_loss = loss / config.grad_accum_steps
+            scaled_loss.backward()
             
             # Gradient step
             if (batch_idx + 1) % config.grad_accum_steps == 0:
@@ -246,21 +256,22 @@ def train(config: LoRATrainConfig) -> None:
                 optimizer.zero_grad()
                 
                 global_step += 1
-                batch_loss = step_loss * config.grad_accum_steps
+                # Average loss over the accumulated batches
+                avg_loss = step_loss / config.grad_accum_steps
                 lr = scheduler.get_last_lr()[0]
                 
                 # Logging
                 if global_step % config.log_steps == 0:
                     pbar.set_postfix({
                         "step": global_step,
-                        "loss": f"{batch_loss:.4f}",
+                        "loss": f"{avg_loss:.4f}",
                         "lr": f"{lr:.2e}",
                     })
                     
                     if wandb_run:
                         import wandb
                         wandb.log({
-                            "train/loss": batch_loss,
+                            "train/loss": avg_loss,
                             "train/lr": lr,
                             "train/epoch": epoch + 1,
                         }, step=global_step)
@@ -314,10 +325,23 @@ def main():
     
     Edit LoRATrainConfig in src/lora/config.py before running.
     """
-    config = LoRATrainConfig()
+    config = LoRATrainConfig(
+        data_dir="/root/arc_data/train_data",
+        eval_dir="/root/arc_data/eval_data",
+        base_checkpoint="/root/checkpoints/phase2/phase2_checkpoint.pt",
+        batch_size=8,
+        grad_accum_steps=4,
+        lr=3.0e-6,
+        epochs=4,
+        max_steps=1500,
+        warmup_steps=150,
+        use_torch_compile=True,
+        compile_mode='default',
+        loss_on_output_only=True,
+    )
     
     # Validate required paths
-    if not config.data_dir:
+    if not config.data_dir or not config.base_checkpoint:
         raise ValueError(
             "Please edit LoRATrainConfig.data_dir in src/lora/config.py "
             "to point to your training data directory."

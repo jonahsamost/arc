@@ -37,16 +37,20 @@ class TTTConfig:
     """Configuration for Test-Time Training."""
     
     # Learning rate for inner loop adaptation
+    # TODO: Consider adding LR warmup/decay for multi-epoch TTT
     inner_lr: float = 1e-3
     
-    # Number of gradient steps per puzzle
-    inner_steps: int = 5
+    # Number of epochs over augmented samples (full passes through data)
+    inner_epochs: int = 1
     
     # Number of augmented examples to generate from support set
     num_augmentations: int = 50
     
     # Batch size for inner loop (samples per step)
     inner_batch_size: int = 8
+    
+    # Gradient clipping (max norm)
+    max_grad_norm: float = 1.0
     
     # Whether to use loss only on output grid pixels
     loss_on_output_only: bool = True
@@ -121,7 +125,6 @@ class LoRATrainConfig:
     # === Model ===
     model_name: str = "Qwen/Qwen3-4B-Thinking-2507"
     base_checkpoint: str = ""  # Path to phase 1-3 finetuned checkpoint
-    lora_checkpoint: Optional[str] = None  # Resume from LoRA checkpoint
     
     # === LoRA ===
     lora_r: int = 4  # LoRA rank (4 is a good default)
@@ -145,16 +148,18 @@ class LoRATrainConfig:
     fim_ratio: float = 0.0  # Fraction of samples to use Fill-In-Middle objective
     
     # === Checkpointing ===
-    output_dir: str = "./checkpoints/lora"
+    output_dir: str = "./checkpoints/lora/"
     save_steps: int = 500  # Save checkpoint every N steps
     log_steps: int = 10  # Log metrics every N steps
     eval_steps: int = 200  # Evaluate every N steps
-    eval_samples: int = 50  # Number of samples for evaluation
+    eval_samples: int = 200  # Number of samples for evaluation
     
     # === Hardware ===
     dtype: str = "bfloat16"  # float32, float16, or bfloat16
     use_amp: bool = True  # Automatic mixed precision
     num_workers: int = 0  # DataLoader workers (0 = main process)
+    use_torch_compile: bool = True  # Use torch.compile for faster training
+    compile_mode: str = "default"  # torch.compile mode: default, reduce-overhead, max-autotune
     
     # === W&B ===
     use_wandb: bool = False
