@@ -826,17 +826,17 @@ def phase2_finetune():
         eval_dir="/root/arc_data/eval_data",
         phase=2,
         checkpoint="./checkpoints/phase1/phase1_checkpoint.pt",
-        lr=1.0e-5,
-        epochs=2,
+        lr=3.0e-6,
+        epochs=4,
         batch_size=8,
-        grad_accum_steps=4,
+        grad_accum_steps=8,
         max_steps=1500,
         warmup_steps=150,
         use_torch_compile=True,
         compile_mode='default',
         loss_on_output_only=True,
         save_steps=250,
-        eval_steps=250,
+        eval_steps=50,
         max_seq_length=1024 * 8,  # Chunked CE handles sequences up to this
     )
     train(config)
