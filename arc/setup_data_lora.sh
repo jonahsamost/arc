@@ -1,12 +1,13 @@
 #!/bin/bash
 ENV_FILE=".env"
+BASE_PATH="/home/ubuntu/arc/arc"
 S3_PATH="s3://arc-agi/finetune-phase2/train_data_phase2.tar"
-DEST_DIR="/root/arc_data/train_data"
+DEST_DIR="${BASE_PATH}/arc_data/train_data"
 DATASET_SIZE="100M"
 
 # Checkpoint paths
 CHECKPOINT_S3_PATH="s3://arc-agi/finetune-phase2/phase2.pt"
-CHECKPOINT_DEST_DIR="/root/checkpoints/phase2"
+CHECKPOINT_DEST_DIR="${BASE_PATH}/checkpoints/phase2"
 CHECKPOINT_DEST_FILE="${CHECKPOINT_DEST_DIR}/phase2_checkpoint.pt"
 
 mkdir -p ${DEST_DIR}

@@ -149,7 +149,7 @@ class LoRATrainConfig:
     
     # === Checkpointing ===
     output_dir: str = "./checkpoints/lora/"
-    save_steps: int = 500  # Save checkpoint every N steps
+    save_steps: int = 200  # Save checkpoint every N steps
     log_steps: int = 10  # Log metrics every N steps
     eval_steps: int = 200  # Evaluate every N steps
     eval_samples: int = 200  # Number of samples for evaluation
@@ -160,9 +160,10 @@ class LoRATrainConfig:
     num_workers: int = 0  # DataLoader workers (0 = main process)
     use_torch_compile: bool = True  # Use torch.compile for faster training
     compile_mode: str = "default"  # torch.compile mode: default, reduce-overhead, max-autotune
+    gradient_checkpointing: bool = True  # Trade compute for memory (required for large batches)
     
     # === W&B ===
-    use_wandb: bool = False
+    use_wandb: bool = True
     wandb_project: str = "arc_lora"
     wandb_run_name: Optional[str] = None
     

@@ -135,6 +135,11 @@ def train(config: LoRATrainConfig) -> None:
     # Move to device
     model = model.to(device)
     
+    # Enable gradient checkpointing (trade compute for memory)
+    if config.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        print("Gradient checkpointing enabled")
+    
     # Apply torch.compile if enabled
     if config.use_torch_compile:
         print(f"Compiling model with mode={config.compile_mode}...")
@@ -277,7 +282,7 @@ def train(config: LoRATrainConfig) -> None:
                         }, step=global_step)
                 
                 # Evaluation
-                if eval_dataloader and global_step % config.eval_steps == 0:
+                if eval_dataloader is not None and global_step % config.eval_steps == 0:
                     eval_loss = evaluate(model, eval_dataloader, device, config)
                     print(f"\n[Step {global_step}] Eval loss: {eval_loss:.4f}")
                     
@@ -325,12 +330,13 @@ def main():
     
     Edit LoRATrainConfig in src/lora/config.py before running.
     """
+    base_path = '/home/ubuntu/arc/arc'
     config = LoRATrainConfig(
-        data_dir="/root/arc_data/train_data",
-        eval_dir="/root/arc_data/eval_data",
-        base_checkpoint="/root/checkpoints/phase2/phase2_checkpoint.pt",
-        batch_size=8,
-        grad_accum_steps=4,
+        data_dir=f"{base_path}/arc_data/train_data",
+        eval_dir=f"{base_path}/arc_data/eval_data",
+        base_checkpoint=f"{base_path}/checkpoints/phase2/phase2_checkpoint.pt",
+        batch_size=16,
+        grad_accum_steps=2,
         lr=3.0e-6,
         epochs=4,
         max_steps=1500,
