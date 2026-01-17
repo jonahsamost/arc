@@ -49,10 +49,12 @@ class LoRALinear(nn.Module):
         
         in_features = base_layer.in_features
         out_features = base_layer.out_features
+        dtype = base_layer.weight.dtype
+        device = base_layer.weight.device
         
-        # LoRA matrices
-        self.lora_A = nn.Parameter(torch.empty(in_features, r))
-        self.lora_B = nn.Parameter(torch.empty(r, out_features))
+        # LoRA matrices - match base layer dtype/device for compatibility
+        self.lora_A = nn.Parameter(torch.empty(in_features, r, dtype=dtype, device=device))
+        self.lora_B = nn.Parameter(torch.empty(r, out_features, dtype=dtype, device=device))
         
         # Optional dropout
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
@@ -183,6 +185,8 @@ def get_lora_state_dict(model) -> Dict[str, torch.Tensor]:
 def load_lora_state_dict(model, state_dict: Dict[str, torch.Tensor]) -> None:
     """
     Load LoRA weights from a state dict into the model.
+    
+    Automatically casts loaded weights to match the model's dtype.
     """
     for layer_idx, layer in enumerate(model.model.layers):
         attn = layer.self_attn
@@ -196,9 +200,10 @@ def load_lora_state_dict(model, state_dict: Dict[str, torch.Tensor]) -> None:
                     b_key = f"{prefix}.lora_B"
                     
                     if a_key in state_dict:
-                        module.lora_A.data.copy_(state_dict[a_key])
+                        # Cast to match existing parameter dtype/device
+                        module.lora_A.data.copy_(state_dict[a_key].to(module.lora_A.dtype))
                     if b_key in state_dict:
-                        module.lora_B.data.copy_(state_dict[b_key])
+                        module.lora_B.data.copy_(state_dict[b_key].to(module.lora_B.dtype))
 
 
 def save_lora(model, path: str) -> None:
