@@ -338,12 +338,13 @@ def main():
         batch_size=16,
         grad_accum_steps=2,
         lr=3.0e-6,
-        epochs=4,
-        max_steps=1500,
-        warmup_steps=150,
+        epochs=8,
+        max_steps=3000,
+        warmup_steps=300,
         use_torch_compile=True,
         compile_mode='default',
         loss_on_output_only=True,
+        eval_samples=500,
     )
     
     # Validate required paths

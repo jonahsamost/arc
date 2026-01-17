@@ -11,6 +11,7 @@ from src.data.re_arc.main import generate_dataset
 def baseline_eval_all_arc_1d(variant1=True, variant2=True):
     print('Getting baseline data')
     puzzles = get_arc_puzzles(variant1=variant1, variant2=variant2)
+    random.shuffle(puzzles)
     print(f'Loaded {len(puzzles)} puzzles')
     aug_puzzles = [({'puzzle': x}, filepath) for x, filepath in puzzles]
     output_path = shard_puzzles(aug_puzzles, training=False)
