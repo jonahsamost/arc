@@ -20,50 +20,8 @@ from dataclasses import dataclass, field
 from tqdm import tqdm
 import numpy as np
 
-from src.lora.config import LoRAConfig, TTTConfig, InferenceConfig, LoRATTTConfig
+from src.lora.config import LoRAConfig, TTTConfig, InferenceConfig, LoRATTTConfig, EvalConfig
 
-
-@dataclass
-class EvalConfig:
-    """Configuration for evaluation. Edit values here before running."""
-    
-    # === Paths ===
-    dataset_path: str = ""  # Path to ARC dataset (directory or file)
-    base_checkpoint: str = ""  # Path to base model checkpoint (phase 2/3)
-    lora_checkpoint: str = ""  # Path to trained LoRA weights (optional, can be empty)
-    
-    # === Model ===
-    model_name: str = "Qwen/Qwen3-4B-Thinking-2507"
-    dtype: str = "bfloat16"
-    
-    # === LoRA ===
-    lora_r: int = 4
-    lora_alpha: float = 1.0
-    lora_target_modules: Tuple[str, ...] = ("q_proj", "v_proj")
-    
-    # === TTT ===
-    ttt_lr: float = 1e-3  # Inner loop learning rate
-    ttt_epochs: int = 1  # Number of epochs over augmented samples
-    num_augmentations: int = 50  # Augmented examples per puzzle
-    ttt_batch_size: int = 8  # Batch size for TTT
-    
-    # === Inference ===
-    num_candidates: int = 3  # Best-of-N sampling
-    temperature: float = 0.7  # Sampling temperature (0 = greedy)
-    top_p: float = 0.9  # Top-p nucleus sampling
-    use_thinking: bool = True  # Add <think> prompt
-    max_new_tokens: int = 512  # Max tokens to generate
-    
-    # === Evaluation ===
-    max_puzzles: Optional[int] = None  # Limit number of puzzles (None = all)
-    
-    @property
-    def torch_dtype(self) -> torch.dtype:
-        return {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16,
-        }[self.dtype]
 from src.lora.lora_model import (
     apply_lora_to_model,
     load_lora,
@@ -382,10 +340,11 @@ def main():
     Edit EvalConfig at the top of this file before running.
     """
     # === EDIT CONFIG HERE ===
+    root_dir = '/home/ubuntu/arc/arc'
     config = EvalConfig(
-        dataset_path="/root/arc_data/eval_data/",
-        base_checkpoint="/root/checkpoints/phase2/phase2_checkpoint.pt",
-        lora_checkpoint="/root/checkpoints/lora/lora_final.pt",
+        dataset_path=f"{root_dir}/arc_data/eval_data/arc1/",
+        base_checkpoint=f"{root_dir}/checkpoints/phase2_checkpoint.pt",
+        lora_checkpoint=f"{root_dir}/checkpoints/lora.pt",
         max_puzzles=None,  # Set to int to limit evaluation
     )
     

@@ -41,7 +41,7 @@ class TTTConfig:
     inner_lr: float = 1e-3
     
     # Number of epochs over augmented samples (full passes through data)
-    inner_epochs: int = 1
+    inner_epochs: int = 2
     
     # Number of augmented examples to generate from support set
     num_augmentations: int = 50
@@ -166,6 +166,50 @@ class LoRATrainConfig:
     use_wandb: bool = True
     wandb_project: str = "arc_lora"
     wandb_run_name: Optional[str] = None
+    
+    @property
+    def torch_dtype(self) -> torch.dtype:
+        return {
+            "float32": torch.float32,
+            "float16": torch.float16,
+            "bfloat16": torch.bfloat16,
+        }[self.dtype]
+
+
+
+@dataclass
+class EvalConfig:
+    """Configuration for evaluation. Edit values here before running."""
+    
+    # === Paths ===
+    dataset_path: str = ""  # Path to ARC dataset (directory or file)
+    base_checkpoint: str = ""  # Path to base model checkpoint (phase 2/3)
+    lora_checkpoint: str = ""  # Path to trained LoRA weights (optional, can be empty)
+    
+    # === Model ===
+    model_name: str = "Qwen/Qwen3-4B-Thinking-2507"
+    dtype: str = "bfloat16"
+    
+    # === LoRA ===
+    lora_r: int = 4
+    lora_alpha: float = 1.0
+    lora_target_modules: Tuple[str, ...] = ("q_proj", "v_proj")
+    
+    # === TTT ===
+    ttt_lr: float = 1e-3  # Inner loop learning rate
+    ttt_epochs: int = 1  # Number of epochs over augmented samples
+    num_augmentations: int = 50  # Augmented examples per puzzle
+    ttt_batch_size: int = 8  # Batch size for TTT
+    
+    # === Inference ===
+    num_candidates: int = 3  # Best-of-N sampling
+    temperature: float = 0.7  # Sampling temperature (0 = greedy)
+    top_p: float = 0.9  # Top-p nucleus sampling
+    use_thinking: bool = True  # Add <think> prompt
+    max_new_tokens: int = 512  # Max tokens to generate
+    
+    # === Evaluation ===
+    max_puzzles: Optional[int] = None  # Limit number of puzzles (None = all)
     
     @property
     def torch_dtype(self) -> torch.dtype:
