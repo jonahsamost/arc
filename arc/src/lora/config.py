@@ -211,6 +211,11 @@ class EvalConfig:
     # === Evaluation ===
     max_puzzles: Optional[int] = None  # Limit number of puzzles (None = all)
     
+    # === W&B ===
+    use_wandb: bool = True
+    wandb_project: str = "arc_ttt_eval"
+    wandb_run_name: Optional[str] = None
+    
     @property
     def torch_dtype(self) -> torch.dtype:
         return {

@@ -40,6 +40,36 @@ from src.data.tokenizer_2d import Arc2DTokenizer
 from src.model.qwen_2d import load_qwen_2d
 
 
+def compute_cell_accuracy(predicted_grid: Optional[np.ndarray], target_grid: np.ndarray) -> float:
+    """
+    Compute the percentage of cells that match between predicted and target grids.
+    
+    Returns 0.0 if prediction is None or shapes don't match.
+    """
+    if predicted_grid is None:
+        return 0.0
+    
+    if predicted_grid.shape != target_grid.shape:
+        # Shapes don't match - compute partial accuracy on overlapping region
+        min_rows = min(predicted_grid.shape[0], target_grid.shape[0])
+        min_cols = min(predicted_grid.shape[1], target_grid.shape[1])
+        
+        if min_rows == 0 or min_cols == 0:
+            return 0.0
+        
+        pred_region = predicted_grid[:min_rows, :min_cols]
+        target_region = target_grid[:min_rows, :min_cols]
+        
+        matching = np.sum(pred_region == target_region)
+        total_target = target_grid.size
+        return matching / total_target
+    
+    # Same shape - straightforward comparison
+    matching = np.sum(predicted_grid == target_grid)
+    total = target_grid.size
+    return matching / total
+
+
 @dataclass
 class EvalResult:
     """Result for a single puzzle evaluation."""
@@ -48,6 +78,7 @@ class EvalResult:
     predicted_grid: Optional[np.ndarray]
     target_grid: np.ndarray
     generated_text: str
+    cell_accuracy: float  # Percentage of cells correct (0.0 - 1.0)
     ttt_time_s: float
     inference_time_s: float
     total_time_s: float
@@ -61,11 +92,18 @@ class EvalMetrics:
     total_time_s: float = 0.0
     avg_ttt_time_s: float = 0.0
     avg_inference_time_s: float = 0.0
+    total_cell_accuracy: float = 0.0  # Sum of cell accuracies for averaging
     results: List[EvalResult] = field(default_factory=list)
     
     @property
     def accuracy(self) -> float:
+        """Exact match accuracy (puzzle fully correct)."""
         return self.num_correct / max(self.num_puzzles, 1)
+    
+    @property
+    def avg_cell_accuracy(self) -> float:
+        """Average cell-level accuracy across all puzzles."""
+        return self.total_cell_accuracy / max(self.num_puzzles, 1)
     
     @property
     def avg_time_per_puzzle_s(self) -> float:
@@ -228,6 +266,7 @@ def evaluate_single_puzzle(
     
     # === Check correctness ===
     correct = verify_prediction(predicted_grid, target_grid)
+    cell_accuracy = compute_cell_accuracy(predicted_grid, target_grid)
     
     total_time = time.time() - start_time
     
@@ -237,6 +276,7 @@ def evaluate_single_puzzle(
         predicted_grid=predicted_grid,
         target_grid=target_grid,
         generated_text=generated_text,
+        cell_accuracy=cell_accuracy,
         ttt_time_s=ttt_time,
         inference_time_s=inference_time,
         total_time_s=total_time,
@@ -251,6 +291,7 @@ def evaluate_arc_dataset(
     inference_config: InferenceConfig,
     device: torch.device,
     max_puzzles: Optional[int] = None,
+    wandb_run: Optional[Any] = None,
 ) -> EvalMetrics:
     """
     Evaluate on an ARC dataset.
@@ -263,6 +304,7 @@ def evaluate_arc_dataset(
         inference_config: Inference configuration
         device: Device to run on
         max_puzzles: If set, only evaluate this many puzzles
+        wandb_run: W&B run object for logging (or None)
     
     Returns:
         EvalMetrics with aggregate results
@@ -282,7 +324,7 @@ def evaluate_arc_dataset(
     # Evaluate each puzzle
     metrics = EvalMetrics()
     
-    for puzzle_id, puzzle in tqdm(puzzles.items(), desc="Evaluating"):
+    for puzzle_idx, (puzzle_id, puzzle) in enumerate(tqdm(puzzles.items(), desc="Evaluating")):
         try:
             result = evaluate_single_puzzle(
                 model=model,
@@ -298,22 +340,54 @@ def evaluate_arc_dataset(
             metrics.results.append(result)
             metrics.num_puzzles += 1
             metrics.total_time_s += result.total_time_s
+            metrics.total_cell_accuracy += result.cell_accuracy
             
             if result.correct:
                 metrics.num_correct += 1
             
             # Print progress
             print(f"  {puzzle_id}: {'✓' if result.correct else '✗'} "
-                  f"(TTT: {result.ttt_time_s:.1f}s, Inf: {result.inference_time_s:.1f}s)")
+                  f"(cells: {result.cell_accuracy:.1%}, TTT: {result.ttt_time_s:.1f}s, Inf: {result.inference_time_s:.1f}s)")
+            
+            # Log to W&B
+            if wandb_run:
+                import wandb
+                wandb.log({
+                    # Per-puzzle metrics
+                    "puzzle/correct": 1 if result.correct else 0,
+                    "puzzle/cell_accuracy": result.cell_accuracy,
+                    "puzzle/ttt_time_s": result.ttt_time_s,
+                    "puzzle/inference_time_s": result.inference_time_s,
+                    "puzzle/total_time_s": result.total_time_s,
+                    # Running aggregate metrics
+                    "eval/accuracy": metrics.accuracy,
+                    "eval/avg_cell_accuracy": metrics.avg_cell_accuracy,
+                    "eval/num_correct": metrics.num_correct,
+                    "eval/num_puzzles": metrics.num_puzzles,
+                }, step=puzzle_idx)
             
         except Exception as e:
             print(f"  {puzzle_id}: ERROR - {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     # Compute averages
     if metrics.num_puzzles > 0:
         metrics.avg_ttt_time_s = sum(r.ttt_time_s for r in metrics.results) / metrics.num_puzzles
         metrics.avg_inference_time_s = sum(r.inference_time_s for r in metrics.results) / metrics.num_puzzles
+    
+    # Log final metrics to W&B
+    if wandb_run:
+        import wandb
+        wandb.log({
+            "final/accuracy": metrics.accuracy,
+            "final/avg_cell_accuracy": metrics.avg_cell_accuracy,
+            "final/num_correct": metrics.num_correct,
+            "final/num_puzzles": metrics.num_puzzles,
+            "final/avg_ttt_time_s": metrics.avg_ttt_time_s,
+            "final/avg_inference_time_s": metrics.avg_inference_time_s,
+        })
     
     return metrics
 
@@ -325,7 +399,8 @@ def print_eval_summary(metrics: EvalMetrics) -> None:
     print("=" * 60)
     print(f"Puzzles evaluated: {metrics.num_puzzles}")
     print(f"Correct: {metrics.num_correct}")
-    print(f"Accuracy: {metrics.accuracy:.2%}")
+    print(f"Exact Match Accuracy: {metrics.accuracy:.2%}")
+    print(f"Avg Cell Accuracy: {metrics.avg_cell_accuracy:.2%}")
     print(f"Total time: {metrics.total_time_s:.1f}s")
     print(f"Avg time per puzzle: {metrics.avg_time_per_puzzle_s:.1f}s")
     print(f"  - Avg TTT time: {metrics.avg_ttt_time_s:.1f}s")
@@ -415,6 +490,22 @@ def main():
     print(f"Inference: {config.num_candidates} candidates, temp={config.temperature}, thinking={config.use_thinking}")
     print("=" * 60 + "\n")
     
+    # Initialize W&B
+    wandb_run = None
+    if config.use_wandb:
+        try:
+            import wandb
+            from dataclasses import asdict
+            run_name = config.wandb_run_name or f"ttt_eval_lr{config.ttt_lr}_aug{config.num_augmentations}"
+            wandb_run = wandb.init(
+                project=config.wandb_project,
+                name=run_name,
+                config=asdict(config),
+            )
+            print(f"W&B initialized: {wandb_run.url}")
+        except Exception as e:
+            print(f"W&B init failed: {e}")
+    
     # Run evaluation
     metrics = evaluate_arc_dataset(
         model=model,
@@ -424,9 +515,15 @@ def main():
         inference_config=inference_config,
         device=device,
         max_puzzles=config.max_puzzles,
+        wandb_run=wandb_run,
     )
     
     print_eval_summary(metrics)
+    
+    # Finish W&B
+    if wandb_run:
+        import wandb
+        wandb.finish()
 
 
 # if __name__ == "__main__":
