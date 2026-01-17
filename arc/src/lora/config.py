@@ -76,7 +76,7 @@ class InferenceConfig:
     use_thinking: bool = True
     
     # Maximum new tokens to generate
-    max_new_tokens: int = 512
+    max_new_tokens: int = 1024
     
     # Stop generation at these tokens
     stop_tokens: Tuple[str, ...] = ("<|answer|>", "<|endoftext|>")
@@ -196,17 +196,17 @@ class EvalConfig:
     lora_target_modules: Tuple[str, ...] = ("q_proj", "v_proj")
     
     # === TTT ===
-    ttt_lr: float = 1e-3  # Inner loop learning rate
-    ttt_epochs: int = 1  # Number of epochs over augmented samples
+    ttt_lr: float = 3e-4  # Inner loop learning rate
+    ttt_epochs: int = 2  # Number of epochs over augmented samples
     num_augmentations: int = 50  # Augmented examples per puzzle
     ttt_batch_size: int = 8  # Batch size for TTT
     
     # === Inference ===
     num_candidates: int = 3  # Best-of-N sampling
-    temperature: float = 0.7  # Sampling temperature (0 = greedy)
+    temperature: float = 0.3  # Sampling temperature (0 = greedy)
     top_p: float = 0.9  # Top-p nucleus sampling
-    use_thinking: bool = True  # Add <think> prompt
-    max_new_tokens: int = 512  # Max tokens to generate
+    use_thinking: bool = False  # Add <think> prompt
+    max_new_tokens: int = 1024  # Max tokens to generate
     
     # === Evaluation ===
     max_puzzles: Optional[int] = None  # Limit number of puzzles (None = all)

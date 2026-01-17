@@ -198,10 +198,10 @@ def generate_with_thinking(
                 grid_mode_list.append(0)
             elif in_grid:
                 if next_token_id == newline_id:
-                    # Newline in grid: move to next row
-                    # Position at end of current row
-                    pos_2d_list.append([grid_row, grid_col])
-                    grid_mode_list.append(1)
+                    # Newline in grid: structural token, not a grid pixel
+                    # Use grid_mode=0 (text mode) for newlines
+                    pos_2d_list.append([0, 0])
+                    grid_mode_list.append(0)
                     grid_row += 1
                     grid_col = 0
                 elif next_token_id in digit_ids:
@@ -211,8 +211,9 @@ def generate_with_thinking(
                     grid_col += 1
                 else:
                     # Other token in grid (shouldn't happen but handle it)
-                    pos_2d_list.append([grid_row, grid_col])
-                    grid_mode_list.append(1)
+                    # Treat as text token
+                    pos_2d_list.append([0, 0])
+                    grid_mode_list.append(0)
             else:
                 # Text token outside grid
                 pos_2d_list.append([0, 0])
