@@ -80,11 +80,12 @@ class Arc2DTokenizer:
         
         # --- Map structural tokens to existing Qwen tokens ---
         # These reuse tokens Qwen already understands semantically
+        # NOTE: These are stored as LISTS of token IDs since some strings are multi-token
         self.structural_ids = {
-            self.TOK_PAIR_START: self._get_token_id("###"),      # Markdown header
-            self.TOK_PAIR_END: self._get_token_id("\n\n"),       # Block separator
-            self.TOK_INPUT: self._get_token_id("Input:"),        # Label
-            self.TOK_OUTPUT: self._get_token_id("Output:"),      # Label
+            self.TOK_PAIR_START: self._get_token_ids("###"),      # Markdown header
+            self.TOK_PAIR_END: self._get_token_ids("\n\n"),       # Block separator
+            self.TOK_INPUT: self._get_token_ids(" Input:"),       # Label (space prefix for proper tokenization)
+            self.TOK_OUTPUT: self._get_token_ids(" Output:"),     # Label (space prefix for proper tokenization)
         }
         
         # --- New tokens that need to be added ---
@@ -105,18 +106,28 @@ class Arc2DTokenizer:
         self._print_debug_info()
     
     def _get_token_id(self, text: str) -> int:
-        """Encode text and return the last token ID."""
+        """Encode text and return the last token ID. DEPRECATED - use _get_token_ids instead."""
         ids = self.tokenizer.encode(text, add_special_tokens=False)
         if not ids:
             raise ValueError(f"Could not encode '{text}'")
         return ids[-1]
+    
+    def _get_token_ids(self, text: str) -> List[int]:
+        """Encode text and return ALL token IDs."""
+        ids = self.tokenizer.encode(text, add_special_tokens=False)
+        if not ids:
+            raise ValueError(f"Could not encode '{text}'")
+        return ids
     
     def _print_debug_info(self):
         """Print token mappings for verification."""
         print(f"Arc2DTokenizer initialized with {self.model_name}")
         print(f"  Digit tokens: 0={self.digit_ids[0]}, 9={self.digit_ids[9]}")
         print(f"  Newline token: {self.newline_id}")
-        print(f"  Structural tokens: {self.structural_ids}")
+        print(f"  Structural tokens (multi-token):")
+        for tok_name, tok_ids in self.structural_ids.items():
+            decoded = self.tokenizer.decode(tok_ids)
+            print(f"    {tok_name}: {tok_ids} -> '{decoded}'")
         print(f"  New tokens to add: {self.new_tokens}")
     
     def add_special_tokens_to_model(self, model):
@@ -138,14 +149,14 @@ class Arc2DTokenizer:
         # Resize embeddings
         model.resize_token_embeddings(len(self.tokenizer))
         
-        # Cache the new token IDs
-        self.structural_ids[self.TOK_GRID_START] = self.tokenizer.convert_tokens_to_ids(self.TOK_GRID_START)
-        self.structural_ids[self.TOK_GRID_END] = self.tokenizer.convert_tokens_to_ids(self.TOK_GRID_END)
-        self.structural_ids[self.TOK_ANSWER] = self.tokenizer.convert_tokens_to_ids(self.TOK_ANSWER)
-        self.structural_ids[self.TOK_FIM_PREFIX] = self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_PREFIX)
-        self.structural_ids[self.TOK_FIM_SUFFIX] = self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_SUFFIX)
-        self.structural_ids[self.TOK_FIM_MIDDLE] = self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_MIDDLE)
-        self.structural_ids[self.TOK_FIM_HOLE] = self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_HOLE)
+        # Cache the new token IDs (as single-element lists for consistency)
+        self.structural_ids[self.TOK_GRID_START] = [self.tokenizer.convert_tokens_to_ids(self.TOK_GRID_START)]
+        self.structural_ids[self.TOK_GRID_END] = [self.tokenizer.convert_tokens_to_ids(self.TOK_GRID_END)]
+        self.structural_ids[self.TOK_ANSWER] = [self.tokenizer.convert_tokens_to_ids(self.TOK_ANSWER)]
+        self.structural_ids[self.TOK_FIM_PREFIX] = [self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_PREFIX)]
+        self.structural_ids[self.TOK_FIM_SUFFIX] = [self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_SUFFIX)]
+        self.structural_ids[self.TOK_FIM_MIDDLE] = [self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_MIDDLE)]
+        self.structural_ids[self.TOK_FIM_HOLE] = [self.tokenizer.convert_tokens_to_ids(self.TOK_FIM_HOLE)]
         
         print(f"  <|grid_start|> ID: {self.structural_ids[self.TOK_GRID_START]}")
         print(f"  <|grid_end|> ID: {self.structural_ids[self.TOK_GRID_END]}")
@@ -160,27 +171,27 @@ class Arc2DTokenizer:
             embed_weight = model.model.embed_tokens.weight
             # Initialize <|grid_start|> from "[" token
             bracket_id = self._get_token_id("[")
-            embed_weight[self.structural_ids[self.TOK_GRID_START]] = embed_weight[bracket_id].clone()
+            embed_weight[self.structural_ids[self.TOK_GRID_START][0]] = embed_weight[bracket_id].clone()
             # Initialize <|grid_end|> from "]" token  
             bracket_id = self._get_token_id("]")
-            embed_weight[self.structural_ids[self.TOK_GRID_END]] = embed_weight[bracket_id].clone()
+            embed_weight[self.structural_ids[self.TOK_GRID_END][0]] = embed_weight[bracket_id].clone()
             # Initialize <|answer|> from EOS token
             eos_id = self.tokenizer.eos_token_id
             if eos_id is not None:
-                embed_weight[self.structural_ids[self.TOK_ANSWER]] = embed_weight[eos_id].clone()
+                embed_weight[self.structural_ids[self.TOK_ANSWER][0]] = embed_weight[eos_id].clone()
             # Initialize FIM tokens from semantically similar tokens
             # <|fim_prefix|> from "<" (start marker)
             start_id = self._get_token_id("<")
-            embed_weight[self.structural_ids[self.TOK_FIM_PREFIX]] = embed_weight[start_id].clone()
+            embed_weight[self.structural_ids[self.TOK_FIM_PREFIX][0]] = embed_weight[start_id].clone()
             # <|fim_suffix|> from ">" (end marker)
             end_id = self._get_token_id(">")
-            embed_weight[self.structural_ids[self.TOK_FIM_SUFFIX]] = embed_weight[end_id].clone()
+            embed_weight[self.structural_ids[self.TOK_FIM_SUFFIX][0]] = embed_weight[end_id].clone()
             # <|fim_middle|> from "=" (middle/equals)
             mid_id = self._get_token_id("=")
-            embed_weight[self.structural_ids[self.TOK_FIM_MIDDLE]] = embed_weight[mid_id].clone()
+            embed_weight[self.structural_ids[self.TOK_FIM_MIDDLE][0]] = embed_weight[mid_id].clone()
             # <|fim_hole|> from "_" (placeholder/blank)
             hole_id = self._get_token_id("_")
-            embed_weight[self.structural_ids[self.TOK_FIM_HOLE]] = embed_weight[hole_id].clone()
+            embed_weight[self.structural_ids[self.TOK_FIM_HOLE][0]] = embed_weight[hole_id].clone()
         
         self._tokens_added = True
         return self.tokenizer, model
@@ -327,8 +338,7 @@ class Arc2DTokenizer:
             # === PAIR START + INPUT HEADER ===
             # "### Input:"
             self._append_text_tokens(
-                [self.structural_ids[self.TOK_PAIR_START], 
-                 self.structural_ids[self.TOK_INPUT]],
+                self.structural_ids[self.TOK_PAIR_START] + self.structural_ids[self.TOK_INPUT],
                 input_ids, labels, pos_2d, grid_mode, output_mask,
                 is_target=False
             )
@@ -344,7 +354,7 @@ class Arc2DTokenizer:
             
             # === INPUT GRID START ===
             self._append_text_tokens(
-                [self.structural_ids[self.TOK_GRID_START]],
+                self.structural_ids[self.TOK_GRID_START],
                 input_ids, labels, pos_2d, grid_mode, output_mask,
                 is_target=False
             )
@@ -358,7 +368,7 @@ class Arc2DTokenizer:
             
             # === INPUT GRID END ===
             self._append_text_tokens(
-                [self.structural_ids[self.TOK_GRID_END]],
+                self.structural_ids[self.TOK_GRID_END],
                 input_ids, labels, pos_2d, grid_mode, output_mask,
                 is_target=False
             )
@@ -366,7 +376,7 @@ class Arc2DTokenizer:
             # === OUTPUT HEADER ===
             # "Output:"
             self._append_text_tokens(
-                [self.structural_ids[self.TOK_OUTPUT]],
+                self.structural_ids[self.TOK_OUTPUT],
                 input_ids, labels, pos_2d, grid_mode, output_mask,
                 is_target=False
             )
@@ -387,7 +397,7 @@ class Arc2DTokenizer:
             
             # === OUTPUT GRID START (PREDICTED) ===
             self._append_text_tokens(
-                [self.structural_ids[self.TOK_GRID_START]],
+                self.structural_ids[self.TOK_GRID_START],
                 input_ids, labels, pos_2d, grid_mode, output_mask,
                 is_target=True  # Model predicts <|grid_start|>
             )
@@ -401,7 +411,7 @@ class Arc2DTokenizer:
             
             # === OUTPUT GRID END (PREDICTED) ===
             self._append_text_tokens(
-                [self.structural_ids[self.TOK_GRID_END]],
+                self.structural_ids[self.TOK_GRID_END],
                 input_ids, labels, pos_2d, grid_mode, output_mask,
                 is_target=True  # Model predicts <|grid_end|>
             )
@@ -410,14 +420,14 @@ class Arc2DTokenizer:
             if is_last:
                 # Final test pair: use <|answer|> as EOS signal
                 self._append_text_tokens(
-                    [self.structural_ids[self.TOK_ANSWER]],
+                    self.structural_ids[self.TOK_ANSWER],
                     input_ids, labels, pos_2d, grid_mode, output_mask,
                     is_target=True  # Model predicts <|answer|>
                 )
             else:
                 # Train pairs: use \n\n as separator
                 self._append_text_tokens(
-                    [self.structural_ids[self.TOK_PAIR_END]],
+                    self.structural_ids[self.TOK_PAIR_END],
                     input_ids, labels, pos_2d, grid_mode, output_mask,
                     is_target=True  # Model predicts pair separator
                 )
@@ -594,7 +604,7 @@ class Arc2DTokenizer:
         grid_mode = []
         masked_values = []
         
-        hole_id = self.structural_ids.get(self.TOK_FIM_HOLE)
+        hole_id = self.structural_ids.get(self.TOK_FIM_HOLE, [None])[0]
         
         for r in range(rows):
             for c in range(cols):
@@ -677,12 +687,10 @@ class Arc2DTokenizer:
             pair_idx = i - num_train if is_test else i
             
             # === PAIR START + INPUT HEADER ===
-            prefix_ids.extend([
-                self.structural_ids[self.TOK_PAIR_START],
-                self.structural_ids[self.TOK_INPUT]
-            ])
-            prefix_pos_2d.extend([(0, 0), (0, 0)])
-            prefix_grid_mode.extend([0, 0])
+            pair_start_input = self.structural_ids[self.TOK_PAIR_START] + self.structural_ids[self.TOK_INPUT]
+            prefix_ids.extend(pair_start_input)
+            prefix_pos_2d.extend([(0, 0)] * len(pair_start_input))
+            prefix_grid_mode.extend([0] * len(pair_start_input))
             
             # === INPUT DIMENSIONS ===
             in_grid = np.array(pair['input'])
@@ -693,9 +701,10 @@ class Arc2DTokenizer:
             prefix_grid_mode.extend([0] * len(dim_tokens))
             
             # === INPUT GRID START ===
-            prefix_ids.append(self.structural_ids[self.TOK_GRID_START])
-            prefix_pos_2d.append((0, 0))
-            prefix_grid_mode.append(0)
+            grid_start = self.structural_ids[self.TOK_GRID_START]
+            prefix_ids.extend(grid_start)
+            prefix_pos_2d.extend([(0, 0)] * len(grid_start))
+            prefix_grid_mode.extend([0] * len(grid_start))
             
             # === INPUT GRID (possibly with holes) ===
             in_mask = mask_lookup.get((pair_type, pair_idx, 'input'))
@@ -706,14 +715,16 @@ class Arc2DTokenizer:
             all_masked_values.extend(in_masked)
             
             # === INPUT GRID END ===
-            prefix_ids.append(self.structural_ids[self.TOK_GRID_END])
-            prefix_pos_2d.append((0, 0))
-            prefix_grid_mode.append(0)
+            grid_end = self.structural_ids[self.TOK_GRID_END]
+            prefix_ids.extend(grid_end)
+            prefix_pos_2d.extend([(0, 0)] * len(grid_end))
+            prefix_grid_mode.extend([0] * len(grid_end))
             
             # === OUTPUT HEADER ===
-            prefix_ids.append(self.structural_ids[self.TOK_OUTPUT])
-            prefix_pos_2d.append((0, 0))
-            prefix_grid_mode.append(0)
+            output_header = self.structural_ids[self.TOK_OUTPUT]
+            prefix_ids.extend(output_header)
+            prefix_pos_2d.extend([(0, 0)] * len(output_header))
+            prefix_grid_mode.extend([0] * len(output_header))
             
             # === OUTPUT DIMENSIONS ===
             out_grid = np.array(pair['output'])
@@ -724,9 +735,9 @@ class Arc2DTokenizer:
             prefix_grid_mode.extend([0] * len(out_dim_tokens))
             
             # === OUTPUT GRID START ===
-            prefix_ids.append(self.structural_ids[self.TOK_GRID_START])
-            prefix_pos_2d.append((0, 0))
-            prefix_grid_mode.append(0)
+            prefix_ids.extend(grid_start)
+            prefix_pos_2d.extend([(0, 0)] * len(grid_start))
+            prefix_grid_mode.extend([0] * len(grid_start))
             
             # === OUTPUT GRID (possibly with holes) ===
             out_mask = mask_lookup.get((pair_type, pair_idx, 'output'))
@@ -737,15 +748,16 @@ class Arc2DTokenizer:
             all_masked_values.extend(out_masked)
             
             # === OUTPUT GRID END ===
-            prefix_ids.append(self.structural_ids[self.TOK_GRID_END])
-            prefix_pos_2d.append((0, 0))
-            prefix_grid_mode.append(0)
+            prefix_ids.extend(grid_end)
+            prefix_pos_2d.extend([(0, 0)] * len(grid_end))
+            prefix_grid_mode.extend([0] * len(grid_end))
             
             # === PAIR END (for non-last pairs) ===
             if i < len(all_pairs) - 1:
-                prefix_ids.append(self.structural_ids[self.TOK_PAIR_END])
-                prefix_pos_2d.append((0, 0))
-                prefix_grid_mode.append(0)
+                pair_end = self.structural_ids[self.TOK_PAIR_END]
+                prefix_ids.extend(pair_end)
+                prefix_pos_2d.extend([(0, 0)] * len(pair_end))
+                prefix_grid_mode.extend([0] * len(pair_end))
         
         # === BUILD FINAL SEQUENCE ===
         # Format: <|fim_prefix|> [prefix] <|fim_suffix|> <|fim_middle|> [masked_values] <|answer|>
@@ -757,11 +769,12 @@ class Arc2DTokenizer:
         output_mask = []
         
         # <|fim_prefix|> - not predicted
-        input_ids.append(self.structural_ids[self.TOK_FIM_PREFIX])
-        labels.append(IGNORE_INDEX)
-        pos_2d.append((0, 0))
-        grid_mode.append(0)
-        output_mask.append(0)
+        fim_prefix = self.structural_ids[self.TOK_FIM_PREFIX]
+        input_ids.extend(fim_prefix)
+        labels.extend([IGNORE_INDEX] * len(fim_prefix))
+        pos_2d.extend([(0, 0)] * len(fim_prefix))
+        grid_mode.extend([0] * len(fim_prefix))
+        output_mask.extend([0] * len(fim_prefix))
         
         # Prefix content (puzzle with holes) - not predicted
         for i, tid in enumerate(prefix_ids):
@@ -772,18 +785,20 @@ class Arc2DTokenizer:
             output_mask.append(0)
         
         # <|fim_suffix|> - not predicted
-        input_ids.append(self.structural_ids[self.TOK_FIM_SUFFIX])
-        labels.append(IGNORE_INDEX)
-        pos_2d.append((0, 0))
-        grid_mode.append(0)
-        output_mask.append(0)
+        fim_suffix = self.structural_ids[self.TOK_FIM_SUFFIX]
+        input_ids.extend(fim_suffix)
+        labels.extend([IGNORE_INDEX] * len(fim_suffix))
+        pos_2d.extend([(0, 0)] * len(fim_suffix))
+        grid_mode.extend([0] * len(fim_suffix))
+        output_mask.extend([0] * len(fim_suffix))
         
         # <|fim_middle|> - predicted (marks start of answer)
-        input_ids.append(self.structural_ids[self.TOK_FIM_MIDDLE])
-        labels.append(self.structural_ids[self.TOK_FIM_MIDDLE])
-        pos_2d.append((0, 0))
-        grid_mode.append(0)
-        output_mask.append(0)
+        fim_middle = self.structural_ids[self.TOK_FIM_MIDDLE]
+        input_ids.extend(fim_middle)
+        labels.extend(fim_middle)  # All tokens predicted
+        pos_2d.extend([(0, 0)] * len(fim_middle))
+        grid_mode.extend([0] * len(fim_middle))
+        output_mask.extend([0] * len(fim_middle))
         
         # Masked values - all predicted
         for tid in all_masked_values:
@@ -794,11 +809,12 @@ class Arc2DTokenizer:
             output_mask.append(1)  # These are the "output" we're predicting
         
         # <|answer|> - predicted (marks end)
-        input_ids.append(self.structural_ids[self.TOK_ANSWER])
-        labels.append(self.structural_ids[self.TOK_ANSWER])
-        pos_2d.append((0, 0))
-        grid_mode.append(0)
-        output_mask.append(0)
+        answer_tok = self.structural_ids[self.TOK_ANSWER]
+        input_ids.extend(answer_tok)
+        labels.extend(answer_tok)  # All tokens predicted
+        pos_2d.extend([(0, 0)] * len(answer_tok))
+        grid_mode.extend([0] * len(answer_tok))
+        output_mask.extend([0] * len(answer_tok))
         
         # === FINAL TENSOR ASSEMBLY ===
         seq_len = len(input_ids)
@@ -834,12 +850,12 @@ class Arc2DTokenizer:
                         current_row = []
                 elif tid in id_to_digit:
                     current_row.append(id_to_digit[tid])
-                elif tid == self.structural_ids.get(self.TOK_GRID_END):
+                elif tid in self.structural_ids.get(self.TOK_GRID_END, []):
                     # End of grid
                     if current_row:
                         rows.append(current_row)
                     break
-                elif tid == self.structural_ids.get(self.TOK_ANSWER):
+                elif tid in self.structural_ids.get(self.TOK_ANSWER, []):
                     # End of answer
                     if current_row:
                         rows.append(current_row)
@@ -861,15 +877,20 @@ class Arc2DTokenizer:
     
     def get_answer_token_id(self) -> Optional[int]:
         """Return the <|answer|> token ID for use as eos_token_id in generation."""
-        return self.structural_ids.get(self.TOK_ANSWER)
+        ids = self.structural_ids.get(self.TOK_ANSWER)
+        return ids[0] if ids else None
     
-    def get_output_token_ids(self) -> Dict[str, int]:
-        """Return token IDs needed for generation stopping/parsing."""
+    def get_output_token_ids(self) -> Dict[str, List[int]]:
+        """Return token IDs needed for generation stopping/parsing.
+        
+        Note: All values are now lists of token IDs to handle multi-token strings.
+        For single-token special tokens, the list will have one element.
+        """
         return {
-            "grid_start": self.structural_ids.get(self.TOK_GRID_START),
-            "grid_end": self.structural_ids.get(self.TOK_GRID_END),
-            "answer": self.structural_ids.get(self.TOK_ANSWER),
-            "pair_end": self.structural_ids.get(self.TOK_PAIR_END),
+            "grid_start": self.structural_ids.get(self.TOK_GRID_START, []),
+            "grid_end": self.structural_ids.get(self.TOK_GRID_END, []),
+            "answer": self.structural_ids.get(self.TOK_ANSWER, []),
+            "pair_end": self.structural_ids.get(self.TOK_PAIR_END, []),
             "newline": self.newline_id,
             "digits": self.digit_ids.copy(),
         }

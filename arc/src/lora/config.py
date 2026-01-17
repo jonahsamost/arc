@@ -37,14 +37,17 @@ class TTTConfig:
     """Configuration for Test-Time Training."""
     
     # Learning rate for inner loop adaptation
-    # TODO: Consider adding LR warmup/decay for multi-epoch TTT
-    inner_lr: float = 1e-3
+    inner_lr: float = 3e-3  # Peak LR (start of training, or after warmup)
+    min_lr: float = 3e-4    # Minimum LR (at end of cosine decay)
+    
+    # Warmup configuration
+    warmup_epochs: int = 0  # Number of epochs for linear warmup (0 to disable)
     
     # Number of epochs over augmented samples (full passes through data)
-    inner_epochs: int = 2
+    inner_epochs: int = 15
     
     # Number of augmented examples to generate from support set
-    num_augmentations: int = 50
+    num_augmentations: int = 100
     
     # Batch size for inner loop (samples per step)
     inner_batch_size: int = 8
@@ -196,9 +199,11 @@ class EvalConfig:
     lora_target_modules: Tuple[str, ...] = ("q_proj", "v_proj")
     
     # === TTT ===
-    ttt_lr: float = 3e-3  # Inner loop learning rate
-    ttt_epochs: int = 8  # Number of epochs over augmented samples
-    num_augmentations: int = 100  # Augmented examples per puzzle
+    ttt_lr: float = 3e-3  # Peak LR (start, no warmup)
+    ttt_min_lr: float = 3e-3  # Minimum LR (same as peak = flat LR, no decay)
+    ttt_warmup_epochs: int = 0  # Warmup epochs (0 = disabled)
+    ttt_epochs: int = 1  # DEBUG: minimal TTT to test inference
+    num_augmentations: int = 5  # DEBUG: minimal augmentations
     ttt_batch_size: int = 8  # Batch size for TTT
     
     # === Inference ===

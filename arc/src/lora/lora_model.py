@@ -80,10 +80,17 @@ class LoRALinear(nn.Module):
         else:
             nn.init.kaiming_uniform_(self.lora_B, a=math.sqrt(5))
     
+    _debug_printed = False  # Class-level flag for one-time debug
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass: base output + LoRA delta.
         """
+        # One-time debug print
+        if not LoRALinear._debug_printed:
+            print(f"[LORA DEBUG] x.dtype={x.dtype}, lora_A.dtype={self.lora_A.dtype}, base_weight.dtype={self.base_layer.weight.dtype}")
+            LoRALinear._debug_printed = True
+        
         # Base layer output (frozen)
         base_out = self.base_layer(x)
         

@@ -189,7 +189,8 @@ def apply_rotary_pos_emb_2d(
     
     # Select based on grid_mode: text tokens use 1D, grid tokens use 2D
     # grid_mode: [batch, seq] -> [batch, 1, seq, 1] for broadcasting
-    mask = grid_mode.unsqueeze(1).unsqueeze(-1).float()
+    # Cast to same dtype as q to avoid dtype promotion issues
+    mask = grid_mode.unsqueeze(1).unsqueeze(-1).to(dtype)
     
     q_embed = mask * q_2d + (1 - mask) * q_1d
     k_embed = mask * k_2d + (1 - mask) * k_1d

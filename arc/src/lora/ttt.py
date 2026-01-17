@@ -6,6 +6,7 @@ Uses ARCAugmenter from src.data.common for data augmentation.
 """
 
 import torch
+import math
 from torch.optim import AdamW
 from typing import Dict, List, Optional
 import random
@@ -64,7 +65,9 @@ def ttt_adapt(
         raise ValueError("No LoRA parameters found in model. Did you call apply_lora_to_model()?")
     
     # Create optimizer for LoRA params only
-    optimizer = AdamW(lora_params, lr=config.inner_lr)
+    # Start with min_lr if using warmup, otherwise start with inner_lr
+    initial_lr = config.min_lr if config.warmup_epochs > 0 else config.inner_lr
+    optimizer = AdamW(lora_params, lr=initial_lr)
     
     # Augment support examples
     augmenter = ARCAugmenter()
@@ -140,10 +143,34 @@ def ttt_adapt(
         return get_lora_state_dict(model)
     
     print(f"[TTT] Starting adaptation: {len(tokenized_samples)} samples, {config.inner_epochs} epochs, batch_size={config.inner_batch_size}")
+    print(f"[TTT] LR schedule: warmup {config.warmup_epochs} epochs to {config.inner_lr}, then cosine decay to {config.min_lr}")
+    
+    def get_lr_for_epoch(epoch: int) -> float:
+        """Compute learning rate for given epoch (0-indexed).
+        
+        Schedule:
+        - Warmup phase: Linear increase from min_lr to inner_lr
+        - Decay phase: Cosine decay from inner_lr to min_lr
+        """
+        if epoch < config.warmup_epochs:
+            # Linear warmup
+            warmup_progress = (epoch + 1) / config.warmup_epochs
+            return config.min_lr + (config.inner_lr - config.min_lr) * warmup_progress
+        else:
+            # Cosine decay after warmup
+            decay_epochs = config.inner_epochs - config.warmup_epochs
+            decay_progress = (epoch - config.warmup_epochs) / max(decay_epochs, 1)
+            # Cosine decay from inner_lr to min_lr
+            return config.min_lr + (config.inner_lr - config.min_lr) * 0.5 * (1 + math.cos(math.pi * decay_progress))
     
     # TTT inner loop - iterate through all samples for each epoch
     total_steps = 0
     for epoch in range(config.inner_epochs):
+        # Update learning rate for this epoch
+        current_lr = get_lr_for_epoch(epoch)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = current_lr
+        
         # Shuffle samples at the start of each epoch
         random.shuffle(tokenized_samples)
         
@@ -182,7 +209,7 @@ def ttt_adapt(
             total_steps += 1
         
         avg_epoch_loss = epoch_loss / max(epoch_batches, 1)
-        print(f"[TTT] Epoch {epoch + 1}/{config.inner_epochs}: avg_loss={avg_epoch_loss:.4f}, steps={epoch_batches}")
+        print(f"[TTT] Epoch {epoch + 1}/{config.inner_epochs}: avg_loss={avg_epoch_loss:.4f}, lr={current_lr:.2e}, steps={epoch_batches}")
     
     print(f"[TTT] Adaptation complete: {total_steps} total steps")
     

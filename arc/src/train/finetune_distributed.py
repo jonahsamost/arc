@@ -842,4 +842,4 @@ def phase2_finetune():
     train(config)
 
 if __name__ == '__main__':
-    phase2_finetune()
+    phase1_finetune()

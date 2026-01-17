@@ -46,6 +46,12 @@ def generate_with_thinking(
     # Tokenize in inference mode (stops after "Output:" for test pair)
     sample = tokenizer.build_sample(puzzle, inference_mode=True)
     
+    # DEBUG: Show input to model
+    input_text = tokenizer.tokenizer.decode(sample["input_ids"].tolist(), skip_special_tokens=False)
+    print(f"[GEN INPUT] Num input tokens: {len(sample['input_ids'])}")
+    print(f"[GEN INPUT] Last 20 token IDs: {sample['input_ids'][-20:].tolist()}")
+    print(f"[GEN INPUT] Last 200 chars of input:\n{input_text[-200:]}")
+    
     input_ids = sample["input_ids"].unsqueeze(0).to(device)
     attention_mask = sample["attention_mask"].unsqueeze(0).to(device)
     pos_1d = sample["pos_1d"].unsqueeze(0).to(device)
@@ -53,8 +59,9 @@ def generate_with_thinking(
     grid_mode = sample["grid_mode"].unsqueeze(0).to(device)
     
     # Get special token IDs for tracking grid state
-    grid_start_id = tokenizer.structural_ids[tokenizer.TOK_GRID_START]
-    grid_end_id = tokenizer.structural_ids[tokenizer.TOK_GRID_END]
+    # Note: structural_ids now stores lists, so we take [0] for single-token special tokens
+    grid_start_id = tokenizer.structural_ids[tokenizer.TOK_GRID_START][0]
+    grid_end_id = tokenizer.structural_ids[tokenizer.TOK_GRID_END][0]
     newline_id = tokenizer.newline_id
     digit_ids = set(tokenizer.digit_ids)
     
@@ -101,7 +108,8 @@ def generate_with_thinking(
     stop_token_ids = []
     for stop_token in config.stop_tokens:
         if stop_token in tokenizer.structural_ids:
-            stop_token_ids.append(tokenizer.structural_ids[stop_token])
+            # structural_ids stores lists, take first (and only) element for special tokens
+            stop_token_ids.append(tokenizer.structural_ids[stop_token][0])
         else:
             # Try encoding the token
             ids = tokenizer.tokenizer.encode(stop_token, add_special_tokens=False)
@@ -229,6 +237,12 @@ def generate_with_thinking(
     # Decode generated tokens (excluding input)
     generated_text = tokenizer.tokenizer.decode(generated_token_list, skip_special_tokens=False)
     
+    # Debug logging
+    print(f"[GEN] Generated {len(generated_token_list)} tokens")
+    print(f"[GEN] grid_mode counts: text={grid_mode_list.count(0)}, grid={grid_mode_list.count(1)}")
+    print(f"[GEN] Token IDs (first 50): {generated_token_list[:50]}")
+    print(f"[GEN] Output text (first 500 chars):\n{generated_text[:500]}")
+    
     return generated_text, generated_token_list
 
 
@@ -249,8 +263,9 @@ def extract_grid_from_tokens(
     Returns:
         numpy array of shape (H, W) with values 0-9, or None if parsing fails
     """
-    grid_start_id = tokenizer.structural_ids[tokenizer.TOK_GRID_START]
-    grid_end_id = tokenizer.structural_ids[tokenizer.TOK_GRID_END]
+    # structural_ids stores lists, take [0] for single-token special tokens
+    grid_start_id = tokenizer.structural_ids[tokenizer.TOK_GRID_START][0]
+    grid_end_id = tokenizer.structural_ids[tokenizer.TOK_GRID_END][0]
     newline_id = tokenizer.newline_id
     digit_ids = tokenizer.digit_ids  # List where index = digit value
     digit_id_set = set(digit_ids)
@@ -264,11 +279,17 @@ def extract_grid_from_tokens(
         elif tok == grid_end_id and last_start != -1:
             last_end = i
     
+    # Debug logging
+    print(f"[EXTRACT] Looking for grid_start_id={grid_start_id}, grid_end_id={grid_end_id}")
+    print(f"[EXTRACT] Total tokens: {len(generated_ids)}, last_start={last_start}, last_end={last_end}")
+    
     if last_start == -1 or last_end == -1 or last_end <= last_start:
+        print(f"[EXTRACT] FAILED: No valid grid found (start={last_start}, end={last_end})")
         return None
     
     # Extract grid tokens (between start and end)
     grid_tokens = generated_ids[last_start + 1:last_end]
+    print(f"[EXTRACT] Grid tokens ({len(grid_tokens)}): {grid_tokens[:30]}{'...' if len(grid_tokens) > 30 else ''}")
     
     # Parse into rows
     rows = []
@@ -289,10 +310,12 @@ def extract_grid_from_tokens(
         rows.append(current_row)
     
     if not rows:
+        print(f"[EXTRACT] FAILED: No rows parsed from grid tokens")
         return None
     
     # Verify all rows have same length
     row_lens = [len(r) for r in rows]
+    print(f"[EXTRACT] Parsed {len(rows)} rows, lengths: {row_lens}")
     if len(set(row_lens)) > 1:
         # Use most common row length, filter out inconsistent rows
         from collections import Counter
@@ -406,6 +429,7 @@ def predict_with_verification(
     candidates = []  # List of (grid, text, token_ids)
     
     for i in range(config.num_candidates):
+        print(f'Predicting candidate: {i + 1}')
         # Generate with temperature (except first one which is greedy)
         temp = 0.0 if i == 0 else config.temperature
         
@@ -427,7 +451,11 @@ def predict_with_verification(
             predicted_grid = extract_grid_from_tokens(token_ids, tokenizer)
             
             if predicted_grid is not None:
+                print(f"[CANDIDATE {i}] Grid extracted successfully, shape: {predicted_grid.shape}")
+                print(f"[CANDIDATE {i}] Grid:\n{predicted_grid}")
                 candidates.append((predicted_grid, output_text))
+            else:
+                print(f'[CANDIDATE {i}] Grid extraction FAILED')
         except Exception as e:
             print(f"Candidate {i} generation failed: {e}")
             continue

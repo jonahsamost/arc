@@ -264,9 +264,19 @@ def evaluate_single_puzzle(
     
     inference_time = time.time() - inference_start
     
+    # === Debug: Show target and predicted grids ===
+    print(f"[EVAL] Target grid shape: {target_grid.shape}")
+    print(f"[EVAL] Target grid:\n{target_grid}")
+    if predicted_grid is not None:
+        print(f"[EVAL] Predicted grid shape: {predicted_grid.shape}")
+        print(f"[EVAL] Predicted grid:\n{predicted_grid}")
+    else:
+        print(f"[EVAL] Predicted grid: None (extraction failed)")
+    
     # === Check correctness ===
     correct = verify_prediction(predicted_grid, target_grid)
     cell_accuracy = compute_cell_accuracy(predicted_grid, target_grid)
+    print(f"[EVAL] Correct: {correct}, Cell accuracy: {cell_accuracy:.2%}")
     
     total_time = time.time() - start_time
     
@@ -350,21 +360,23 @@ def evaluate_arc_dataset(
                   f"(cells: {result.cell_accuracy:.1%}, TTT: {result.ttt_time_s:.1f}s, Inf: {result.inference_time_s:.1f}s)")
             
             # Log to W&B
+            log_values = {
+                "puzzle/correct": 1 if result.correct else 0,
+                "puzzle/cell_accuracy": result.cell_accuracy,
+                "puzzle/ttt_time_s": result.ttt_time_s,
+                "puzzle/inference_time_s": result.inference_time_s,
+                "puzzle/total_time_s": result.total_time_s,
+                # Running aggregate metrics
+                "eval/accuracy": metrics.accuracy,
+                "eval/avg_cell_accuracy": metrics.avg_cell_accuracy,
+                "eval/num_correct": metrics.num_correct,
+                "eval/num_puzzles": metrics.num_puzzles,
+            }
+            for k, v in log_values.items():
+                print(f'PUZZLE: {k}: {v}')
             if wandb_run:
                 import wandb
-                wandb.log({
-                    # Per-puzzle metrics
-                    "puzzle/correct": 1 if result.correct else 0,
-                    "puzzle/cell_accuracy": result.cell_accuracy,
-                    "puzzle/ttt_time_s": result.ttt_time_s,
-                    "puzzle/inference_time_s": result.inference_time_s,
-                    "puzzle/total_time_s": result.total_time_s,
-                    # Running aggregate metrics
-                    "eval/accuracy": metrics.accuracy,
-                    "eval/avg_cell_accuracy": metrics.avg_cell_accuracy,
-                    "eval/num_correct": metrics.num_correct,
-                    "eval/num_puzzles": metrics.num_puzzles,
-                }, step=puzzle_idx)
+                wandb.log(log_values, step=puzzle_idx)
             
         except Exception as e:
             print(f"  {puzzle_id}: ERROR - {e}")
@@ -466,6 +478,8 @@ def main():
     # Create TTT and inference configs
     ttt_config = TTTConfig(
         inner_lr=config.ttt_lr,
+        min_lr=config.ttt_min_lr,
+        warmup_epochs=config.ttt_warmup_epochs,
         inner_epochs=config.ttt_epochs,
         num_augmentations=config.num_augmentations,
         inner_batch_size=config.ttt_batch_size,

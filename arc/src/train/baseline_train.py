@@ -199,7 +199,9 @@ def parse_grid_from_tokens_2d(
     try:
         # Create reverse mapping from token ID to digit
         id_to_digit = {tid: i for i, tid in enumerate(tokenizer.digit_ids)}
-        grid_end_id = tokenizer.structural_ids.get(tokenizer.TOK_GRID_END)
+        # structural_ids now stores lists, get first element for single-token special tokens
+        grid_end_ids = tokenizer.structural_ids.get(tokenizer.TOK_GRID_END, [])
+        grid_end_id = grid_end_ids[0] if grid_end_ids else None
         newline_id = tokenizer.newline_id
         
         rows = []
