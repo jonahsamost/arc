@@ -88,7 +88,10 @@ class LoRALinear(nn.Module):
         base_out = self.base_layer(x)
         
         # LoRA path: x @ A @ B * scaling
-        lora_out = self.dropout(x) @ self.lora_A @ self.lora_B * self.scaling
+        # Cast LoRA params to input dtype to handle optimizer promoting to float32
+        lora_A = self.lora_A.to(x.dtype)
+        lora_B = self.lora_B.to(x.dtype)
+        lora_out = self.dropout(x) @ lora_A @ lora_B * self.scaling
         
         return base_out + lora_out
     

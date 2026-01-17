@@ -196,9 +196,9 @@ class EvalConfig:
     lora_target_modules: Tuple[str, ...] = ("q_proj", "v_proj")
     
     # === TTT ===
-    ttt_lr: float = 3e-4  # Inner loop learning rate
-    ttt_epochs: int = 2  # Number of epochs over augmented samples
-    num_augmentations: int = 50  # Augmented examples per puzzle
+    ttt_lr: float = 3e-3  # Inner loop learning rate
+    ttt_epochs: int = 8  # Number of epochs over augmented samples
+    num_augmentations: int = 100  # Augmented examples per puzzle
     ttt_batch_size: int = 8  # Batch size for TTT
     
     # === Inference ===
