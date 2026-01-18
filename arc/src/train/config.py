@@ -45,7 +45,7 @@ class TrainConfig:
     save_steps: int = 5000  # Save checkpoint every N steps
     log_steps: int = 10  # Log metrics every N steps
     eval_steps: int = 1000  # Evaluate every N steps (quick sampled eval)
-    eval_samples: Optional[int] = 100  # Samples per eval (None = full eval set)
+    eval_samples: Optional[int] = 200  # Samples per eval (None = full eval set)
     save_optimizer_state: bool = False  # Model-only checkpoints (~15GB vs ~76GB)
     
     # === Weights & Biases ===

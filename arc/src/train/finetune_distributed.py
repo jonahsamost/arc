@@ -800,12 +800,13 @@ def phase1_finetune():
 
     """
     # === Configure your training here ===
+    base_path = '/home/ubuntu/arc/arc'
     config = Phase1Config(
-        data_dir="/root/arc_data/train_data",
-        eval_dir="/root/arc_data/eval_data",
+        data_dir=f"{base_path}/arc_data/train_data",
+        eval_dir=f"{base_path}/arc_data/eval_data",
         distributed=False,
-        batch_size=8,
-        grad_accum_steps=4,
+        batch_size=16,
+        grad_accum_steps=2,
         lr=2.5e-5,
         max_steps=20_000,
         warmup_steps=1000,
@@ -821,11 +822,12 @@ def phase1_finetune():
 
 
 def phase2_finetune():
+    base_path = '/home/ubuntu/arc/arc'
     config = Phase2Config(
-        data_dir="/root/arc_data/train_data",
-        eval_dir="/root/arc_data/eval_data",
+        data_dir=f"{base_path}/arc_data/train_data",
+        eval_dir=f"{base_path}/arc_data/eval_data",
         phase=2,
-        checkpoint="./checkpoints/phase1/phase1_checkpoint.pt",
+        checkpoint=f"{base_path}/checkpoints/phase1/phase1_checkpoint.pt",
         lr=3.0e-6,
         epochs=4,
         batch_size=8,
