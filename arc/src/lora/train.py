@@ -12,6 +12,7 @@ Usage:
 """
 
 import os
+import time
 
 # Silence tokenizer parallelism warning
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -137,7 +138,7 @@ def train(config: LoRATrainConfig) -> None:
     
     # Enable gradient checkpointing (trade compute for memory)
     if config.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         print("Gradient checkpointing enabled")
     
     # Apply torch.compile if enabled
@@ -235,6 +236,7 @@ def train(config: LoRATrainConfig) -> None:
         
         pbar = tqdm(train_dataloader, desc=f"Epoch {epoch + 1}")
         
+        step_start_time = time.time()
         for batch_idx, batch in enumerate(pbar):
             # Forward pass
             loss = compute_ntp_loss(
@@ -254,7 +256,8 @@ def train(config: LoRATrainConfig) -> None:
             # Gradient step
             if (batch_idx + 1) % config.grad_accum_steps == 0:
                 # Clip gradients
-                torch.nn.utils.clip_grad_norm_(lora_param_list, config.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(lora_param_list, config.max_grad_norm)
+                grad_norm_float = grad_norm.item() if torch.is_tensor(grad_norm) else float(grad_norm)
                 
                 optimizer.step()
                 scheduler.step()
@@ -264,6 +267,7 @@ def train(config: LoRATrainConfig) -> None:
                 # Average loss over the accumulated batches
                 avg_loss = step_loss / config.grad_accum_steps
                 lr = scheduler.get_last_lr()[0]
+                step_time = time.time() - step_start_time if step_start_time else 0
                 
                 # Logging
                 if global_step % config.log_steps == 0:
@@ -279,6 +283,8 @@ def train(config: LoRATrainConfig) -> None:
                             "train/loss": avg_loss,
                             "train/lr": lr,
                             "train/epoch": epoch + 1,
+                            "train/grad_norm": grad_norm_float,
+                            "train/step_time": step_time,
                         }, step=global_step)
                 
                 # Evaluation
@@ -306,6 +312,7 @@ def train(config: LoRATrainConfig) -> None:
                 
                 if config.max_steps and global_step >= config.max_steps:
                     break
+                step_start_time = time.time()
         
         if config.max_steps and global_step >= config.max_steps:
             break
@@ -337,14 +344,16 @@ def main():
         base_checkpoint=f"{base_path}/checkpoints/phase1/phase1_checkpoint.pt",
         batch_size=16,
         grad_accum_steps=2,
+        gradient_checkpointing=True,
         lr=3.0e-6,
         epochs=8,
         max_steps=3000,
         warmup_steps=300,
-        use_torch_compile=True,
+        use_torch_compile=False,
         compile_mode='default',
         loss_on_output_only=True,
         eval_samples=500,
+        lora_r=16,
     )
     
     # Validate required paths

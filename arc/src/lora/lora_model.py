@@ -85,6 +85,10 @@ class LoRALinear(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass: base output + LoRA delta.
+        
+        Note: We use the LoRA parameters directly without .to(dtype) conversion
+        to preserve gradients during gradient checkpointing. The parameters are
+        already initialized with the correct dtype in __init__.
         """
         # One-time debug print
         if not LoRALinear._debug_printed:
@@ -95,10 +99,18 @@ class LoRALinear(nn.Module):
         base_out = self.base_layer(x)
         
         # LoRA path: x @ A @ B * scaling
-        # Cast LoRA params to input dtype to handle optimizer promoting to float32
-        lora_A = self.lora_A.to(x.dtype)
-        lora_B = self.lora_B.to(x.dtype)
-        lora_out = self.dropout(x) @ lora_A @ lora_B * self.scaling
+        # Cast input to param dtype if needed (preserves gradients on params)
+        # This is gradient-safe: we cast x, not the parameters
+        if x.dtype != self.lora_A.dtype:
+            x_lora = x.to(self.lora_A.dtype)
+        else:
+            x_lora = x
+        
+        lora_out = self.dropout(x_lora) @ self.lora_A @ self.lora_B * self.scaling
+        
+        # Cast back to original dtype if needed
+        if lora_out.dtype != base_out.dtype:
+            lora_out = lora_out.to(base_out.dtype)
         
         return base_out + lora_out
     
