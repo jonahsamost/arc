@@ -433,6 +433,8 @@ def main():
         base_checkpoint=f"{root_dir}/checkpoints/phase2_checkpoint.pt",
         lora_checkpoint=f"{root_dir}/checkpoints/lora.pt",
         max_puzzles=None,  # Set to int to limit evaluation
+        lora_r=16,
+        temperature=.05,
     )
     
     # Validate required paths
