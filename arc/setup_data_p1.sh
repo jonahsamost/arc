@@ -2,7 +2,7 @@
 ENV_FILE=".env"
 TRAIN_S3_PATH="s3://arc-agi/finetune-phase1/train_data_finetune_phase1.tar"
 EVAL_S3_PATH="s3://arc-agi/evals/shard_0.jsonl"
-BASE_DIR="/root"
+BASE_DIR="/home/ubuntu/arc/arc"
 TRAIN_DEST_DIR="${BASE_DIR}/arc_data/train_data"
 EVAL_DEST_DIR="${BASE_DIR}/arc_data/eval_data"
 DATASET_SIZE="10G"
