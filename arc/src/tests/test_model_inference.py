@@ -24,6 +24,33 @@ from src.data.tokenizer_2d import Arc2DTokenizer
 from src.model.qwen_2d import load_qwen_2d
 
 
+def _set_2d_positions(model, pos_2d: torch.Tensor, grid_mode: torch.Tensor) -> None:
+    """
+    Store 2D position tensors on attention layers for forward pass access.
+    """
+    # Handle FSDP wrapping or torch.compile
+    base_model = model
+    if hasattr(model, '_fsdp_wrapped_module'):
+        base_model = model._fsdp_wrapped_module
+    elif hasattr(model, 'module'):
+        base_model = model.module
+    elif hasattr(model, '_orig_mod'):
+        base_model = model._orig_mod
+    
+    # Access layers
+    if hasattr(base_model, 'model') and hasattr(base_model.model, 'layers'):
+        layers = base_model.model.layers
+    else:
+        return
+    
+    for layer in layers:
+        attn = layer.self_attn if hasattr(layer, 'self_attn') else layer
+        if hasattr(attn, '_fsdp_wrapped_module'):
+            attn = attn._fsdp_wrapped_module
+        attn._pos_2d = pos_2d
+        attn._grid_mode = grid_mode
+
+
 def load_eval_puzzles(eval_dir: str, max_puzzles: int = 10) -> List[Tuple[dict, str]]:
     """Load evaluation puzzles from directory."""
     eval_path = Path(eval_dir)
@@ -132,11 +159,16 @@ def generate_output(
     digit_ids = set(tokenizer.digit_ids)
     
     # Stop tokens
-    stop_ids = {grid_end_id, answer_id, tokenizer.tokenizer.eos_token_id}
+    stop_ids = {grid_end_id, answer_id}
+    if tokenizer.tokenizer.eos_token_id is not None:
+        stop_ids.add(tokenizer.tokenizer.eos_token_id)
     
-    # Set 2D positions for model
-    model.set_pos_2d(pos_2d)
-    model.set_grid_mode(grid_mode)
+    # Convert pos_2d and grid_mode to lists for easy extension during generation
+    pos_2d_list = pos_2d[0].tolist()  # List of [y, x] pairs
+    grid_mode_list = grid_mode[0].tolist()  # List of 0/1 values
+    
+    # Set initial 2D positions on model
+    _set_2d_positions(model, pos_2d, grid_mode)
     
     generated_ids = []
     current_ids = input_ids
@@ -149,6 +181,11 @@ def generate_output(
     
     with torch.no_grad():
         for _ in range(max_new_tokens):
+            # Update positions for current length
+            current_pos_2d = torch.tensor([pos_2d_list], dtype=torch.long, device=device)
+            current_grid_mode = torch.tensor([grid_mode_list], dtype=torch.long, device=device)
+            _set_2d_positions(model, current_pos_2d, current_grid_mode)
+            
             outputs = model(
                 input_ids=current_ids,
                 attention_mask=current_mask,
@@ -188,21 +225,19 @@ def generate_output(
             
             # Determine grid_mode and pos_2d for new token
             if in_grid and next_token_id in digit_ids:
-                new_grid_mode = torch.ones(1, 1, dtype=torch.long, device=device)
-                new_pos_2d = torch.tensor([[[grid_row, grid_col - 1]]], dtype=torch.long, device=device)
+                pos_2d_list.append([grid_row, grid_col - 1])
+                grid_mode_list.append(1)
+            elif in_grid and next_token_id == newline_id:
+                # Newlines in grid mode get positioned at end of row
+                pos_2d_list.append([grid_row - 1, grid_col])
+                grid_mode_list.append(1)
             else:
-                new_grid_mode = torch.zeros(1, 1, dtype=torch.long, device=device)
-                new_pos_2d = torch.zeros(1, 1, 2, dtype=torch.long, device=device)
+                pos_2d_list.append([0, 0])
+                grid_mode_list.append(0)
             
             # Append to sequences
             current_ids = torch.cat([current_ids, next_token], dim=1)
             current_mask = torch.cat([current_mask, torch.ones(1, 1, dtype=torch.long, device=device)], dim=1)
-            
-            # Update model's position tracking
-            current_pos_2d = torch.cat([model._pos_2d, new_pos_2d], dim=1)
-            current_grid_mode = torch.cat([model._grid_mode, new_grid_mode], dim=1)
-            model.set_pos_2d(current_pos_2d)
-            model.set_grid_mode(current_grid_mode)
     
     # Decode generated text
     generated_text = tokenizer.tokenizer.decode(generated_ids, skip_special_tokens=False)
@@ -454,7 +489,7 @@ def main():
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint")
     parser.add_argument("--eval_dir", type=str, required=True, help="Path to eval puzzle directory")
     parser.add_argument("--num_puzzles", type=int, default=5, help="Number of puzzles to test")
-    parser.add_argument("--max_tokens", type=int, default=512, help="Max tokens to generate")
+    parser.add_argument("--max_tokens", type=int, default=1024, help="Max tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.3, help="Sampling temperature")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")

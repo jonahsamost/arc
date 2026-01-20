@@ -334,7 +334,7 @@ def main():
     config = LoRATrainConfig(
         data_dir=f"{base_path}/arc_data/train_data",
         eval_dir=f"{base_path}/arc_data/eval_data",
-        base_checkpoint=f"{base_path}/checkpoints/phase2/phase2_checkpoint.pt",
+        base_checkpoint=f"{base_path}/checkpoints/phase1/phase1_checkpoint.pt",
         batch_size=16,
         grad_accum_steps=2,
         lr=3.0e-6,
